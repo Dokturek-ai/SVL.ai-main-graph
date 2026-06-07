@@ -14,14 +14,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Active development branch is `hermes`** (not `main`). `main` tracks upstream.
 - When creating PRs intended to land upstream, target `HKUDS/LightRAG` — see AGENTS.md "Commit and Pull Request Guidance". Fork-internal changes stay on `origin`.
 
-## Deployment
+## Deployment & configuration
 
-- **Railway** is the deployment target (the `railway` MCP plugin is configured; `Dockerfile` uses `--mount=type=cache` build cache directives — each cache mount requires a unique `id=`, per recent fixes).
-- `docker-compose.final.yml` is **generated output** assembled from `scripts/setup/templates/*.yml` by the setup wizard. Do not hand-edit it as a source of truth; regenerate via `make env-base-rewrite` / `make env-storage-rewrite`. It mounts `./data/{rag_storage,inputs,prompts}` and `./.env` into the container on port `9621`.
-- `.env` is present and configured (host-usable). Keep container-only hostnames and staged SSL paths in the wizard-managed compose layer, not in `.env`.
+- **Railway** is the deployment target. Project **SVL.ai**, environment **production**. Build uses the **RAILPACK** builder (the repo `Dockerfile` is NOT used by Railway); service start command is `lightrag-server`.
+- **Production config source of truth = Railway environment variables** (edit directly via Railway dashboard / `railway` CLI). Do NOT reintroduce the `make env-*` wizard flow — it is inherited from upstream and intentionally unused here. `scripts/setup/`, `docker-compose.final.yml`, and the wizard Make targets remain in the repo as legacy but are not the config path.
+- `env.example` is a **reference catalog** of every available variable (keep it accurate); local `.env` (gitignored) is for local dev only.
+- Railway services (production): `dokturek-LightRAG` (API), `MinerU` (parser), `pgVector-Railway` (Postgres+pgvector), `Neo4j Graph Database (Metal-Ready)`. Services talk over Railway private DNS (`*.railway.internal`); DB TCP proxies are removed (internal-only).
 
-## Runtime configuration (current)
+## Runtime configuration (current production)
 
-Per `.clinerules`: Gemini 2.5 Flash + `BAAI/bge-m3` embeddings via custom OpenAI-compatible endpoints, default file-persistence storage (`JsonKVStorage` / `NetworkXStorage` / `NanoVectorDBStorage`), workspace `space1` for data isolation, JWT auth.
+- **LLM:** OpenAI `gpt-5-mini` (`LLM_BINDING=openai`).
+- **Embedding:** Jina `jina-embeddings-v5-text-small`, dim 1024. `EMBEDDING_BINDING_HOST` must be the full `https://api.jina.ai/v1/embeddings` (the jina client POSTs the host as-is — a bare `/v1` returns 404).
+- **Rerank:** Jina `jina-reranker-v3` (`RERANK_BINDING=jina`).
+- **Storage:** `PGKVStorage` / `PGVectorStorage` / `PGDocStatusStorage` (pgVector-Railway) + `Neo4JStorage` (Neo4j service). Not file-based.
+- **Parser:** MinerU local mode, `MINERU_LOCAL_BACKEND=pipeline` — the MinerU service is CPU-only (no GPU); `hybrid-auto-engine` crashes on CPU under load (`libgomp: Thread creation failed`).
+- **Language:** `SUMMARY_LANGUAGE=Czech`, `MINERU_LANGUAGE=cs` (Czech). Auth: `LIGHTRAG_API_KEY` set.
 
-> **Pitfall:** switching the embedding model requires clearing the data directory — existing vectors will not match the new model's space (keep `kv_store_llm_response_cache.json` if you want to preserve LLM cache).
+> **Pitfall:** switching the embedding model requires clearing/reingesting the vector data — existing vectors will not match the new model's space.
