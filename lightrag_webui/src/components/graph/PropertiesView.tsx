@@ -39,14 +39,15 @@ const PropertiesView = () => {
 
     if (element) {
       return {
-        currentElement: type === 'node'
-          ? refineNodeProperties(element as any)
-          : refineEdgeProperties(element as any),
+        currentElement:
+          type === 'node'
+            ? refineNodeProperties(element as any)
+            : refineEdgeProperties(element as any),
         currentType: type
       }
     }
     return { currentElement: null, currentType: null }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusedNode, selectedNode, focusedEdge, selectedEdge, graphDataVersion, getNode, getEdge])
 
   if (!currentElement) {
@@ -93,21 +94,23 @@ const refineNodeProperties = (node: RawNodeType): NodeType => {
       const edges = state.sigmaGraph.edges(node.id)
 
       for (const edgeId of edges) {
-        if (!state.sigmaGraph.hasEdge(edgeId)) continue;
+        if (!state.sigmaGraph.hasEdge(edgeId)) continue
 
         const edge = state.rawGraph.getEdge(edgeId, true)
         if (edge) {
           const isTarget = node.id === edge.source
           const neighbourId = isTarget ? edge.target : edge.source
 
-          if (!state.sigmaGraph.hasNode(neighbourId)) continue;
+          if (!state.sigmaGraph.hasNode(neighbourId)) continue
 
           const neighbour = state.rawGraph.getNode(neighbourId)
           if (neighbour) {
             relationships.push({
               type: 'Neighbour',
               id: neighbourId,
-              label: neighbour.properties['entity_id'] ? neighbour.properties['entity_id'] : neighbour.labels.join(', ')
+              label: neighbour.properties['entity_id']
+                ? neighbour.properties['entity_id']
+                : neighbour.labels.join(', ')
             })
           }
         }
@@ -215,7 +218,13 @@ const PropertyRow = ({
   }
 
   // Use EditablePropertyRow for editable fields (description, entity_id and entity_type)
-  if (isEditable && (name === 'description' || name === 'entity_id' || name === 'entity_type'  || name === 'keywords')) {
+  if (
+    isEditable &&
+    (name === 'description' ||
+      name === 'entity_id' ||
+      name === 'entity_type' ||
+      name === 'keywords')
+  ) {
     return (
       <EditablePropertyRow
         name={name}
@@ -241,9 +250,10 @@ const PropertyRow = ({
       <span className="text-primary/60 tracking-wide whitespace-nowrap">
         {getPropertyNameTranslation(name)}
         {name === 'source_id' && truncate && <sup className="text-red-500">†</sup>}
-      </span>:
+      </span>
+      :
       <Text
-        className="hover:bg-primary/20 rounded p-1 overflow-hidden text-ellipsis"
+        className="hover:bg-primary/20 overflow-hidden rounded p-1 text-ellipsis"
         tooltipClassName="max-w-96 -translate-x-13"
         text={formattedValue}
         tooltip={formattedTooltip}
@@ -267,8 +277,10 @@ const NodePropertiesView = ({ node, pipelineBusy }: { node: NodeType; pipelineBu
 
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex justify-between items-center">
-        <h3 className="text-md pl-1 font-bold tracking-wide text-blue-700">{t('graphPanel.propertiesView.node.title')}</h3>
+      <div className="flex items-center justify-between">
+        <h3 className="text-md pl-1 font-bold tracking-wide text-blue-700">
+          {t('graphPanel.propertiesView.node.title')}
+        </h3>
         <div className="flex gap-3">
           {pipelineBusy && (
             <Button
@@ -277,7 +289,7 @@ const NodePropertiesView = ({ node, pipelineBusy }: { node: NodeType; pipelineBu
               variant="ghost"
               aria-label={t('graphPanel.propertiesView.editLockedByPipeline')}
               aria-disabled="true"
-              className="h-7 w-7 border border-amber-400 hover:bg-amber-50 dark:border-amber-600 dark:hover:bg-amber-900/40 !cursor-default"
+              className="h-7 w-7 !cursor-default border border-amber-400 hover:bg-amber-50 dark:border-amber-600 dark:hover:bg-amber-900/40"
               tooltip={t('graphPanel.propertiesView.editLockedByPipeline')}
               onClick={(e) => e.preventDefault()}
             >
@@ -315,12 +327,14 @@ const NodePropertiesView = ({ node, pipelineBusy }: { node: NodeType; pipelineBu
         />
         <PropertyRow name={t('graphPanel.propertiesView.node.degree')} value={node.degree} />
       </div>
-      <h3 className="text-md pl-1 font-bold tracking-wide text-amber-700">{t('graphPanel.propertiesView.node.properties')}</h3>
+      <h3 className="text-md pl-1 font-bold tracking-wide text-amber-700">
+        {t('graphPanel.propertiesView.node.properties')}
+      </h3>
       <div className="bg-primary/5 max-h-96 overflow-auto rounded p-1">
         {Object.keys(node.properties)
           .sort()
           .map((name) => {
-            if (name === 'created_at' || name === 'truncate') return null; // Hide created_at and truncate properties
+            if (name === 'created_at' || name === 'truncate') return null // Hide created_at and truncate properties
             return (
               <PropertyRow
                 key={name}
@@ -329,7 +343,9 @@ const NodePropertiesView = ({ node, pipelineBusy }: { node: NodeType; pipelineBu
                 nodeId={String(node.id)}
                 entityId={node.properties['entity_id']}
                 entityType="node"
-                isEditable={name === 'description' || name === 'entity_id' || name === 'entity_type'}
+                isEditable={
+                  name === 'description' || name === 'entity_id' || name === 'entity_type'
+                }
                 truncate={node.properties['truncate']}
                 pipelineBusy={pipelineBusy}
               />
@@ -338,7 +354,7 @@ const NodePropertiesView = ({ node, pipelineBusy }: { node: NodeType; pipelineBu
       </div>
       {node.relationships.length > 0 && (
         <>
-          <h3 className="text-md pl-1 font-bold tracking-wide text-emerald-700">
+          <h3 className="text-md text-primary pl-1 font-bold tracking-wide">
             {t('graphPanel.propertiesView.node.relationships')}
           </h3>
           <div className="bg-primary/5 max-h-96 overflow-auto rounded p-1">
@@ -365,8 +381,10 @@ const EdgePropertiesView = ({ edge, pipelineBusy }: { edge: EdgeType; pipelineBu
   const { t } = useTranslation()
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex justify-between items-center">
-        <h3 className="text-md pl-1 font-bold tracking-wide text-violet-700">{t('graphPanel.propertiesView.edge.title')}</h3>
+      <div className="flex items-center justify-between">
+        <h3 className="text-md pl-1 font-bold tracking-wide text-violet-700">
+          {t('graphPanel.propertiesView.edge.title')}
+        </h3>
         {pipelineBusy && (
           <Button
             type="button"
@@ -374,7 +392,7 @@ const EdgePropertiesView = ({ edge, pipelineBusy }: { edge: EdgeType; pipelineBu
             variant="ghost"
             aria-label={t('graphPanel.propertiesView.editLockedByPipeline')}
             aria-disabled="true"
-            className="h-7 w-7 border border-amber-400 hover:bg-amber-50 dark:border-amber-600 dark:hover:bg-amber-900/40 !cursor-default"
+            className="h-7 w-7 !cursor-default border border-amber-400 hover:bg-amber-50 dark:border-amber-600 dark:hover:bg-amber-900/40"
             tooltip={t('graphPanel.propertiesView.editLockedByPipeline')}
             onClick={(e) => e.preventDefault()}
           >
@@ -384,7 +402,9 @@ const EdgePropertiesView = ({ edge, pipelineBusy }: { edge: EdgeType; pipelineBu
       </div>
       <div className="bg-primary/5 max-h-96 overflow-auto rounded p-1">
         <PropertyRow name={t('graphPanel.propertiesView.edge.id')} value={edge.id} />
-        {edge.type && <PropertyRow name={t('graphPanel.propertiesView.edge.type')} value={edge.type} />}
+        {edge.type && (
+          <PropertyRow name={t('graphPanel.propertiesView.edge.type')} value={edge.type} />
+        )}
         <PropertyRow
           name={t('graphPanel.propertiesView.edge.source')}
           value={edge.sourceNode ? edge.sourceNode.labels.join(', ') : edge.source}
@@ -400,12 +420,14 @@ const EdgePropertiesView = ({ edge, pipelineBusy }: { edge: EdgeType; pipelineBu
           }}
         />
       </div>
-      <h3 className="text-md pl-1 font-bold tracking-wide text-amber-700">{t('graphPanel.propertiesView.edge.properties')}</h3>
+      <h3 className="text-md pl-1 font-bold tracking-wide text-amber-700">
+        {t('graphPanel.propertiesView.edge.properties')}
+      </h3>
       <div className="bg-primary/5 max-h-96 overflow-auto rounded p-1">
         {Object.keys(edge.properties)
           .sort()
           .map((name) => {
-            if (name === 'created_at' || name === 'truncate') return null; // Hide created_at and truncate properties
+            if (name === 'created_at' || name === 'truncate') return null // Hide created_at and truncate properties
             return (
               <PropertyRow
                 key={name}
