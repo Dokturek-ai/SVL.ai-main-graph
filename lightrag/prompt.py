@@ -655,6 +655,27 @@ User Query: {query}
 ---Output---
 Output:"""
 
+PROMPTS["query_contextualization"] = """---Role---
+You rewrite follow-up queries for a Retrieval-Augmented Generation (RAG) system. Retrieval ignores the conversation history, so a bare follow-up ("and for men?", "what about the dose?") must be turned into a self-contained query before it can retrieve the right documents.
+
+---Goal---
+Given the conversation history and a follow-up query, rewrite the follow-up into a fully standalone query that carries all the context it needs to be understood on its own.
+
+---Instructions---
+1. Resolve every reference (pronouns, ellipses, "and for X?", "what about ...") using the conversation history so the rewritten query names its subject explicitly.
+2. Preserve the user's original intent and scope. Do NOT answer the query, do NOT add facts that are not in the history, do NOT broaden or narrow what was asked.
+3. If the follow-up is already self-contained, return it unchanged.
+4. Output ONLY the rewritten query text — no preamble, no quotes, no explanation, no labels.
+5. Write the rewritten query in {language}.
+
+---Conversation History---
+{history}
+
+---Follow-up Query---
+{query}
+
+---Standalone Query---"""
+
 PROMPTS["keywords_extraction_examples"] = [
     """Example 1:
 
