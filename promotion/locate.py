@@ -81,10 +81,12 @@ def locate(surface: str, chunk_text: str, chunk_id: str = "", threshold: float =
         if hit:
             spans.append(hit)
     if spans and len(spans) / len(surf_tokens) >= threshold:
-        return Anchor(
-            chunk_id=chunk_id,
-            start=min(s for s, _ in spans),
-            end=max(e for _, e in spans),
-            match="stemmed",
-        )
+        start = min(s for s, _ in spans)
+        end = max(e for _, e in spans)
+        # Reject a degenerate window: tokens scattered across unrelated text make
+        # a technically-non-None but meaningless anchor. Below the cap -> real
+        # match; above -> None, and the caller quarantines (safe, never a false
+        # admit).
+        if end - start <= max(len(surface) * 4, 60):
+            return Anchor(chunk_id=chunk_id, start=start, end=end, match="stemmed")
     return None

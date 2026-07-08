@@ -70,8 +70,12 @@ def _counts(bundle: Bundle, registry) -> dict[str, Any]:
     }
 
 
-def build_manifest(bundle: Bundle, snapshot: dict[str, list[dict]], pins: dict | None = None) -> Manifest:
-    registry = build_registry(snapshot["chunks"], snapshot["docs"])
+def build_manifest(
+    bundle: Bundle, snapshot: dict[str, list[dict]], pins: dict | None = None, overrides=None
+) -> Manifest:
+    # overrides must match promote()'s so the manifest's corpus/edition audit
+    # fields describe the same records that were promoted.
+    registry = build_registry(snapshot["chunks"], snapshot["docs"], overrides)
     return Manifest(
         content_hash=_content_hash(bundle),
         corpus=_corpus(registry),

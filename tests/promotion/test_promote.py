@@ -29,7 +29,8 @@ def test_quarantine_reasons(snapshot):
     reasons = {q.name: q.reason for q in b.quarantine}
     assert reasons["Komorbidity"] == "entity-not-found"
     assert reasons["Ghost"] == "chunk-unresolved"
-    assert reasons["Arteriální hypertenze -> Komorbidity"] == "endpoint-missing"
+    # the edge's tail (Komorbidity) was itself quarantined -> distinct reason
+    assert reasons["Arteriální hypertenze -> Komorbidity"] == "endpoint-quarantined"
 
 
 @pytest.mark.offline

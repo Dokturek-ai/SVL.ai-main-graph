@@ -11,7 +11,7 @@ conflicts flagged (G3).
 
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 from .canonicalize import load_aliases, load_type_enum, merge_key, validate_type
 from .edition import (
@@ -78,30 +78,50 @@ def promote(snapshot: dict[str, list[dict]], overrides=None) -> Bundle:
             }
         )
 
-    # Phase B — merge grounded nodes sharing a canonical key + type.
-    groups: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    work_latest = work_latest_editions(registry)
+
+    # Phase B — merge grounded nodes sharing a canonical key (case/diacritic/
+    # alias). Grouped on the key ALONE (not key+type) so a name that LightRAG
+    # emitted under two types collapses to one node instead of a name->node
+    # collision; the type is the dominant one (deterministic tiebreak).
+    groups: dict[str, list[dict]] = defaultdict(list)
     for g in grounded:
-        groups[(merge_key(g["name"], aliases), g["type"])].append(g)
+        groups[merge_key(g["name"], aliases)].append(g)
 
     nodes: list[GroundedNode] = []
     by_name: dict[str, GroundedNode] = {}
-    for (mkey, type_), members in groups.items():
+    for mkey, members in groups.items():
         names = sorted({m["name"] for m in members})
+        counts = Counter(m["type"] for m in members)
+        top = max(counts.values())
+        type_ = sorted(t for t, c in counts.items() if c == top)[0]
         editions = [e for m in members for e in m["editions"]]
-        works = [w for m in members for w in m["works"]]
-        edition = latest_edition(editions)
+        works = sorted({w for m in members for w in m["works"]})
+        appearances = {
+            (w, e) for m in members for w, e in zip(m["works"], m["editions"])
+        }
+        # A concept is current if it appears in the latest edition of ANY of its
+        # works (a node spans many works — e.g. Hypertenze in 17 DPs — so a single
+        # work's edition can't decide supersession).
+        current = any(work_latest.get(w) == e for w, e in appearances)
+        superseded = (
+            None
+            if current
+            else max((work_latest[w] for w in works), key=edition_sort_key, default=None)
+        )
         node = GroundedNode(
             node_id=_node_id(mkey, type_),
             canonical_name=names[0],  # deterministic display among variants
             type=type_,
             surface_forms=names,
-            as_of=edition,
+            as_of=latest_edition(editions),
             work_id=works[0] if works else "",
-            edition_date=edition,
+            edition_date=latest_edition(editions),
             anchors=[a for m in members for a in m["anchors"]],
             source_ids=sorted({s for m in members for s in m["source_ids"]}),
             description=next((m["description"] for m in members if m["description"]), ""),
             concept_ref=next((m["concept_ref"] for m in members if m["concept_ref"]), None),
+            superseded_by_edition=superseded,
         )
         nodes.append(node)
         for m in members:
@@ -112,8 +132,9 @@ def promote(snapshot: dict[str, list[dict]], overrides=None) -> Bundle:
     for e in snapshot["edges"]:
         head, tail = by_name.get(e["head"]), by_name.get(e["tail"])
         if head is None or tail is None:
+            # an endpoint was itself quarantined / never extracted -> re-extract
             quarantine.append(
-                Quarantine("edge", f'{e["head"]} -> {e["tail"]}', "endpoint-missing", e.get("source_ids", []))
+                Quarantine("edge", f'{e["head"]} -> {e["tail"]}', "endpoint-quarantined", e.get("source_ids", []))
             )
             continue
         candidates: list[tuple] = []
@@ -125,8 +146,9 @@ def promote(snapshot: dict[str, list[dict]], overrides=None) -> Bundle:
             if ha and ta:
                 candidates.append((chunk, ha))
         if not candidates:
+            # both endpoints exist but never co-occur in a source chunk -> fix source_ids
             quarantine.append(
-                Quarantine("edge", f'{e["head"]} -> {e["tail"]}', "endpoint-missing", e.get("source_ids", []))
+                Quarantine("edge", f'{e["head"]} -> {e["tail"]}', "endpoints-not-co-locatable", e.get("source_ids", []))
             )
             continue
         # An edge asserted across editions is stamped with its LATEST (current)
@@ -149,9 +171,9 @@ def promote(snapshot: dict[str, list[dict]], overrides=None) -> Bundle:
             )
         )
 
-    # Phase D — edition supersession (older-only facts) + cross-edition conflicts.
-    work_latest = work_latest_editions(registry)
-    mark_supersession(nodes + edges, work_latest)
+    # Phase D — edition supersession for edges (nodes handled per-work in Phase
+    # B) + cross-edition conflict flags.
+    mark_supersession(edges, work_latest)
     flag_conflicts(edges)
 
     return Bundle(nodes=nodes, edges=edges, quarantine=quarantine)

@@ -18,6 +18,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from lightrag.base import DocStatus
+
 from .jsonl import write_jsonl
 
 try:  # separator LightRAG uses to join multi-valued source_id / file_path
@@ -78,10 +80,13 @@ async def harvest(rag: Any, out_dir: str | Path) -> dict[str, int]:
         for e in raw_edges
     ]
 
-    # Chunks: read the text_chunks KV store. get_all() is the batch read; if a
-    # backend lacks it the live smoke reports it (confirmed on first run).
-    chunk_store = rag.text_chunks
-    raw_chunks = await chunk_store.get_all()
+    # Chunks: the text_chunks KV store has no batch get_all; fetch exactly the
+    # chunks the graph references (the union of node/edge source_ids) via
+    # get_by_ids — that is precisely the set the registry needs.
+    referenced = {sid for n in nodes for sid in n["source_ids"]}
+    referenced |= {sid for e in edges for sid in e["source_ids"]}
+    ids = sorted(referenced)
+    fetched = await rag.text_chunks.get_by_ids(ids) if ids else []
     chunks = [
         {
             "chunk_id": cid,
@@ -90,10 +95,11 @@ async def harvest(rag: Any, out_dir: str | Path) -> dict[str, int]:
             "file_path": c.get("file_path", ""),
             "chunk_order_index": c.get("chunk_order_index", 0),
         }
-        for cid, c in (raw_chunks or {}).items()
+        for cid, c in zip(ids, fetched)
+        if c
     ]
 
-    doc_status = await rag.get_docs_by_status("processed")
+    doc_status = await rag.get_docs_by_status(DocStatus.PROCESSED)
     docs = [
         {
             "doc_id": doc_id,
