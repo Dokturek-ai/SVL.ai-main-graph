@@ -63,7 +63,8 @@ Harvest writes: `snapshot/nodes.jsonl`, `snapshot/edges.jsonl`, `snapshot/chunks
 ChunkRecord   = {chunk_id, doc_id, work_id, edition_date, char_len, text, content_hash, page?=None}
 Anchor        = {chunk_id, start, end, match: "exact"|"normalized"|"stemmed", page?=None}
 GroundedNode  = {node_id, canonical_name, surface_forms[], type, as_of, work_id, edition_date,
-                 anchors[], source_ids[], fidelity: "verified", superseded_by_edition?=None}
+                 anchors[], source_ids[], fidelity: "verified", superseded_by_edition?=None,
+                 concept_ref?={mkn10_code?, cui?}}   # propagated from chunk-concept-ref-tagging; null → mkn10 resolves
 GroundedEdge  = {edge_id, head_id, rel_type, tail_id, keywords, description, as_of, work_id,
                  edition_date, anchor, fidelity: "verified"}         # label = source-anchored co-occurrence
 Quarantine    = {kind: "entity"|"edge", raw_name/endpoints, source_id, reason, work_id, edition_date}

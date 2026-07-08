@@ -30,8 +30,9 @@ Implements `plan.md`. One phase = one commit (no squash). `[ ]` = todo. Each tas
 
 ## P5 — G5 typing + canonicalization
 - [ ] T050 `promotion/enums/entity_types.yaml` (~5–15 controlled kinds) + `promotion/canonicalize.py`: name normalization (case/diacritics/whitespace/punct) + versioned `aliases.yaml`; validate type ∈ enum at promotion (else `other` or quarantine). → verify: `test_canonicalize` — `Praktický lékář`/`Praktický Lékář` merge; alias applied; off-enum type handled.
-- [ ] T051 Confirm the entity-type enum is injected into extraction via LightRAG `entity_types` config (the deployment already has `default_entity_types_guidance`/`{entity_types_guidance}` scaffolding) — document the config wiring; validate at promotion regardless. → verify: note in spec/plan; no live re-ingest required here.
-- [ ] **Commit** `feat(001): G5 entity-type enum + name canonicalization + alias table`.
+- [ ] T051 Confirm the entity-type enum is injected into extraction via LightRAG `entity_types` config (the deployment already has `default_entity_types_guidance`/`{entity_types_guidance}` scaffolding) — document the config wiring; validate at promotion regardless. → verify: note in spec/plan; no live re-ingest required here. The enum names the clinical kinds (`Condition/Diagnosis`, `Medication/Drug`, `Symptom`, `Procedure`, `LabTest`, `Concept`, `Other`).
+- [ ] T052 `promote.py` propagates an optional `concept_ref = {mkn10_code?, cui?}` onto each `GroundedNode` when the chunk/entity carries a tag (from the `chunk-concept-ref-tagging` pass); null when untagged (mkn10 resolves at harvest). The promotion pass propagates, never resolves. → verify: `test_promote_concept_ref` — a tagged fixture entity carries `concept_ref`; an untagged one is null; no resolver call made.
+- [ ] **Commit** `feat(001): G5 entity-type enum + canonicalization + concept_ref propagation`.
 
 ## Close-out
 - [ ] T060 Full `tests/promotion/` green (`pytest -m offline`), `ruff` clean. → verify: CI-equivalent local run.
