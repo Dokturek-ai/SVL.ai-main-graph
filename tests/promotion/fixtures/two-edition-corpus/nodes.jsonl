@@ -1,0 +1,10 @@
+{"name": "Arteriální hypertenze", "type": "Condition", "description": "Vysoký krevní tlak.", "source_ids": ["hyp2014-c0", "hyp2024-c0"], "file_paths": ["Arteriální hypertenze_2014.md", "Arteriální hypertenze_2024.md"], "concept_ref": {"mkn10_code": "I10"}}
+{"name": "Ramipril", "type": "Medication", "description": "ACE inhibitor.", "source_ids": ["hyp2014-c0", "hyp2024-c0"], "file_paths": ["Arteriální hypertenze_2014.md", "Arteriální hypertenze_2024.md"], "concept_ref": {"cui": "C0072973"}}
+{"name": "Betablokátory", "type": "Medication", "description": "Beta blokátory.", "source_ids": ["hyp2024-c0"], "file_paths": ["Arteriální hypertenze_2024.md"]}
+{"name": "Srdeční selhání", "type": "Condition", "description": "Selhání srdce.", "source_ids": ["hyp2024-c0"], "file_paths": ["Arteriální hypertenze_2024.md"]}
+{"name": "140/90 mmHg", "type": "Concept", "description": "Cílový tlak 2014.", "source_ids": ["hyp2014-c0"], "file_paths": ["Arteriální hypertenze_2014.md"]}
+{"name": "130/80 mmHg", "type": "Concept", "description": "Cílový tlak 2024.", "source_ids": ["hyp2024-c0"], "file_paths": ["Arteriální hypertenze_2024.md"]}
+{"name": "Praktický lékař", "type": "Person", "description": "Ošetřující lékař.", "source_ids": ["hyp2014-c1"], "file_paths": ["Arteriální hypertenze_2014.md"]}
+{"name": "Praktický Lékář", "type": "Person", "description": "Ošetřující lékař.", "source_ids": ["hyp2024-c1"], "file_paths": ["Arteriální hypertenze_2024.md"]}
+{"name": "Komorbidity", "type": "Concept", "description": "Přidružené choroby.", "source_ids": ["hyp2014-c0"], "file_paths": ["Arteriální hypertenze_2014.md"]}
+{"name": "Ghost", "type": "Other", "description": "Uzel se ztraceným chunkem.", "source_ids": ["missing-c9"], "file_paths": ["Arteriální hypertenze_2014.md"]}
