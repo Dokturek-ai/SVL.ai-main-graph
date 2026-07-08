@@ -122,3 +122,11 @@ class Bundle:
     nodes: list[GroundedNode]
     edges: list[GroundedEdge]
     quarantine: list[Quarantine]
+
+
+@dataclass
+class Manifest:
+    content_hash: str
+    corpus: list[dict[str, Any]]
+    pins: dict[str, Any]
+    counts: dict[str, Any]
