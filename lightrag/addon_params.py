@@ -44,7 +44,7 @@ def default_addon_params() -> dict[str, Any]:
     # module via ``LightRAG`` construction paths.
     from lightrag.parser.routing import default_chunker_config
 
-    return {
+    params: dict[str, Any] = {
         "language": get_env_value("SUMMARY_LANGUAGE", DEFAULT_SUMMARY_LANGUAGE, str),
         "entity_type_prompt_file": get_env_value("ENTITY_TYPE_PROMPT_FILE", "", str),
         # Per-strategy chunker parameters; mutate at runtime (e.g.
@@ -55,6 +55,15 @@ def default_addon_params() -> dict[str, Any]:
         # are not affected by later runtime mutations.
         "chunker": default_chunker_config(),
     }
+    # Optional inline override of the entity-type guidance via env — used when
+    # the file-based ENTITY_TYPE_PROMPT_FILE can't ship (e.g. RAILPACK runtime
+    # images that don't carry repo prompt files). Only set the key when non-empty
+    # so the resolve step falls back to the built-in default otherwise (an empty
+    # string would trip the non-empty validation).
+    _guidance = get_env_value("ENTITY_TYPES_GUIDANCE", "", str)
+    if _guidance.strip():
+        params["entity_types_guidance"] = _guidance
+    return params
 
 
 def normalize_addon_params(addon_params: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -86,6 +95,13 @@ def normalize_addon_params(addon_params: Mapping[str, Any] | None) -> dict[str, 
         "entity_type_prompt_file",
         get_env_value("ENTITY_TYPE_PROMPT_FILE", "", str),
     )
+    # Backfill the inline guidance override from env when the caller did not
+    # supply one — only when non-empty (an empty string trips resolve's
+    # non-empty validation; absence falls back to the built-in default).
+    if "entity_types_guidance" not in normalized:
+        _guidance = get_env_value("ENTITY_TYPES_GUIDANCE", "", str)
+        if _guidance.strip():
+            normalized["entity_types_guidance"] = _guidance
     # Build the chunker default lazily — `default_chunker_config()` reads env
     # vars (e.g. CHUNK_R_SEPARATORS via json.loads) and would raise on a
     # malformed value, which would prevent an explicit caller-supplied
