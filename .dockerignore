@@ -20,9 +20,9 @@ build/
 *.tar.gz
 
 # Exclude siles and folders
-*.yml
-# ...but ship our canonical clinical entity-extraction profile (PROMPT_DIR=/app/prompts)
-!prompts/entity_type/clinical_cs.yml
+# NOTE: `*.yml` removed — RAILPACK honours the exclusion but NOT `!` negations,
+# so it dropped prompts/entity_type/clinical_cs.yml (the clinical extraction
+# profile) from the image and crash-looped LightRAG. yml files now ship.
 .dockerignore
 Dockerfile
 Makefile
