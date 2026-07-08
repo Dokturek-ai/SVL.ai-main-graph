@@ -3667,6 +3667,91 @@ async def extract_entities(
     return chunk_results
 
 
+async def _contextualize_query_with_history(
+    query: str,
+    query_param: QueryParam,
+    global_config: dict[str, str],
+    hashing_kv: BaseKVStorage | None = None,
+) -> str:
+    """Rewrite a follow-up query into a standalone query using conversation history.
+
+    Retrieval (keyword extraction + vector search) uses only the query text and
+    ignores ``conversation_history`` by design, so a bare follow-up like "and for
+    men?" retrieves on the wrong terms. When history is present, condense the
+    follow-up into a self-contained query for the retrieval path only; the answer
+    LLM still receives the original query plus the full history. On any failure the
+    original query is returned, so retrieval is never worse than before.
+
+    The rewrite call runs only on follow-up turns (history present) and is cached,
+    so an identical follow-up under identical history costs nothing extra.
+    """
+    history = query_param.conversation_history
+    if not history:
+        return query
+
+    addon_params = global_config.get("addon_params") or {}
+    language = global_config.get("_resolved_summary_language")
+    if language is None:
+        language = addon_params.get("language", DEFAULT_SUMMARY_LANGUAGE)
+
+    # Most recent turns only, and cap each message: long assistant answers would
+    # bloat the rewrite prompt (and its cost) without helping disambiguation.
+    recent = history[-6:]
+    history_text = "\n".join(
+        f"{msg.get('role', 'user')}: {(msg.get('content') or '')[:500]}"
+        for msg in recent
+    )
+
+    # Cache the rewrite on (query + trimmed history + language) so an identical
+    # follow-up under identical history reuses the result instead of paying for
+    # another LLM call.
+    args_hash = compute_args_hash(query, history_text, language, "query_rewrite")
+    cached_result = await handle_cache(
+        hashing_kv, args_hash, query, query_param.mode, cache_type="query_rewrite"
+    )
+    if cached_result is not None:
+        cached_response, _ = cached_result  # Extract content, ignore timestamp
+        cached_response = (cached_response or "").strip()
+        if cached_response:
+            return cached_response
+
+    prompt = PROMPTS["query_contextualization"].format(
+        history=history_text,
+        query=query,
+        language=language,
+    )
+    try:
+        use_model_func = partial(
+            global_config["role_llm_funcs"]["query"], _priority=DEFAULT_QUERY_PRIORITY
+        )
+        rewritten = await use_model_func(prompt, stream=False)
+        rewritten = (rewritten or "").strip()
+    except Exception as e:
+        logger.warning(
+            f"[contextualize] query rewrite failed, using original query: {e}"
+        )
+        return query
+
+    if not rewritten:
+        return query
+
+    if hashing_kv is not None and hashing_kv.global_config.get("enable_llm_cache"):
+        await save_to_cache(
+            hashing_kv,
+            CacheData(
+                args_hash=args_hash,
+                content=rewritten,
+                prompt=query,
+                mode=query_param.mode,
+                cache_type="query_rewrite",
+            ),
+        )
+
+    if rewritten != query:
+        logger.info(f"[contextualize] rewrote query: '{query}' -> '{rewritten}'")
+    return rewritten
+
+
 async def kg_query(
     query: str,
     knowledge_graph_inst: BaseGraphStorage,
@@ -3718,8 +3803,15 @@ async def kg_query(
     )
     llm_cache_identity = get_llm_cache_identity(global_config, "query")
 
-    hl_keywords, ll_keywords = await get_keywords_from_query(
+    # Contextualize follow-up queries: retrieval ignores conversation_history, so
+    # rewrite the query to a standalone form before keyword/vector search. The
+    # answer LLM below still gets the original `query` plus the full history.
+    retrieval_query = await _contextualize_query_with_history(
         query, query_param, global_config, hashing_kv
+    )
+
+    hl_keywords, ll_keywords = await get_keywords_from_query(
+        retrieval_query, query_param, global_config, hashing_kv
     )
 
     logger.debug(f"High-level keywords: {hl_keywords}")
@@ -3731,9 +3823,11 @@ async def kg_query(
     if hl_keywords == [] and query_param.mode in ["global", "hybrid", "mix"]:
         logger.warning("high_level_keywords is empty")
     if hl_keywords == [] and ll_keywords == []:
-        if len(query) < 50:
-            logger.warning(f"Forced low_level_keywords to origin query: {query}")
-            ll_keywords = [query]
+        if len(retrieval_query) < 50:
+            logger.warning(
+                f"Forced low_level_keywords to origin query: {retrieval_query}"
+            )
+            ll_keywords = [retrieval_query]
         else:
             return QueryResult(content=PROMPTS["fail_response"])
 
@@ -3742,7 +3836,7 @@ async def kg_query(
 
     # Build query context (unified interface)
     context_result = await _build_query_context(
-        query,
+        retrieval_query,
         ll_keywords_str,
         hl_keywords_str,
         knowledge_graph_inst,
@@ -5616,7 +5710,13 @@ async def naive_query(
         logger.error("Tokenizer not found in global configuration.")
         return QueryResult(content=PROMPTS["fail_response"])
 
-    chunks = await _get_vector_context(query, chunks_vdb, query_param, None)
+    # Contextualize follow-up queries before vector search (see kg_query); the
+    # answer LLM below still receives the original `query` plus the full history.
+    retrieval_query = await _contextualize_query_with_history(
+        query, query_param, global_config, hashing_kv
+    )
+
+    chunks = await _get_vector_context(retrieval_query, chunks_vdb, query_param, None)
 
     if chunks is None or len(chunks) == 0:
         logger.info(
@@ -5663,9 +5763,10 @@ async def naive_query(
         f"Naive query token allocation - Total: {max_total_tokens}, SysPrompt: {sys_prompt_tokens}, Query: {query_tokens}, Buffer: {buffer_tokens}, Available for chunks: {available_chunk_tokens}"
     )
 
-    # Process chunks using unified processing with dynamic token limit
+    # Process chunks using unified processing with dynamic token limit.
+    # Rerank against the contextualized query so follow-ups rank correctly.
     processed_chunks = await process_chunks_unified(
-        query=query,
+        query=retrieval_query,
         unique_chunks=chunks,
         query_param=query_param,
         global_config=global_config,
@@ -5745,6 +5846,11 @@ async def naive_query(
     args_hash = compute_args_hash(
         query_param.mode,
         query,
+        # Retrieval uses the contextualized query, so it must key the answer cache
+        # too — otherwise the same follow-up under different history returns a
+        # cached answer built from the wrong chunks. (kg_query is history-aware
+        # via its keyword strings; naive has no keywords, so key on it directly.)
+        retrieval_query,
         query_param.response_type,
         query_param.top_k,
         query_param.chunk_top_k,
