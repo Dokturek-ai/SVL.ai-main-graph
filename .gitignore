@@ -55,8 +55,10 @@ output/
 rag_storage/
 data/
 
-# User cumstomized prompt directory
-prompts/entity_type/
+# User cumstomized prompt directory (dir stays local; our canonical clinical
+# profile is whitelisted so it ships with the deploy)
+prompts/entity_type/*
+!prompts/entity_type/clinical_cs.yml
 
 # Evaluation results
 lightrag/evaluation/results/
