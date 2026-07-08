@@ -16,7 +16,10 @@ def test_nothing_is_silently_dropped(snapshot):
     b = promote(snapshot)
     entity_q = [q for q in b.quarantine if q.kind == "entity"]
     edge_q = [q for q in b.quarantine if q.kind == "edge"]
-    assert len(b.nodes) + len(entity_q) == len(snapshot["nodes"])  # 10
+    # every input node is either quarantined or a surface form of an emitted node
+    # (merged case-variants share one node, so count surface forms, not nodes)
+    emitted_surface_forms = sum(len(n.surface_forms) for n in b.nodes)
+    assert emitted_surface_forms + len(entity_q) == len(snapshot["nodes"])  # 10
     assert len(b.edges) + len(edge_q) == len(snapshot["edges"])  # 5
 
 
@@ -32,7 +35,7 @@ def test_quarantine_reasons(snapshot):
 @pytest.mark.offline
 def test_admitted_counts_and_stemmed_anchor(snapshot):
     b = promote(snapshot)
-    assert len(b.nodes) == 8
+    assert len(b.nodes) == 7  # 8 grounded, 2 Praktický variants merge into 1
     assert len(b.edges) == 4
     srdecni = next(n for n in b.nodes if n.canonical_name == "Srdeční selhání")
     assert any(a.match == "stemmed" for a in srdecni.anchors)

@@ -1,0 +1,15 @@
+# Controlled entity-type enum (G5). Names the clinical kinds the downstream
+# mkn10 linkage needs, so the emit signals diagnosis/drug resolution candidates.
+# A promoted entity whose extracted type is not in this set is mapped to `Other`.
+types:
+  - Condition      # a clinical condition / diagnosis (mkn10_code candidate)
+  - Diagnosis
+  - Medication     # a drug / medication (cui / SÚKL candidate)
+  - Drug
+  - Symptom
+  - Procedure
+  - LabTest
+  - Concept        # generic clinical concept
+  - Person
+  - Organization
+  - Other

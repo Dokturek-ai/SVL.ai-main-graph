@@ -1,0 +1,6 @@
+# Versioned alias table (G5): canonical form -> list of known surface variants.
+# Case/diacritic variants merge automatically via the canonicalization key;
+# this table is for variants that normalization cannot catch (abbreviations,
+# synonyms). Empty is valid. Extend as measured collisions warrant.
+version: 1
+aliases: {}

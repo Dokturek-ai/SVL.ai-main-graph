@@ -3,13 +3,17 @@
 The repo is the last writer here. A node/edge enters the bundle only if G1
 locates its surface form(s) in the chunk its ``source_id`` points to; the found
 offsets become the anchor. Ungrounded -> quarantine (machine-readable reason),
-never admitted-with-a-marker, never silently dropped (emitted + quarantined
-covers every input). Edition supersession/conflict (G3) and canonicalization
-(G5) layer onto the records built here.
+never admitted-with-a-marker, never silently dropped (emitted-surface-forms +
+quarantined covers every input). Grounded nodes are then merged by their
+canonical key (G5), stamped with edition/supersession, and cross-edition
+conflicts flagged (G3).
 """
 
 from __future__ import annotations
 
+from collections import defaultdict
+
+from .canonicalize import load_aliases, load_type_enum, merge_key, validate_type
 from .edition import (
     edition_sort_key,
     flag_conflicts,
@@ -23,8 +27,10 @@ from .registry import build_registry
 from .types import Anchor, Bundle, GroundedEdge, GroundedNode, Quarantine
 
 
-def _node_id(name: str, type_: str) -> str:
-    return sha1_hex(name, type_)
+def _node_id(merge_key_: str, type_: str) -> str:
+    # Keyed on the canonical merge key (not the display name) so case/diacritic
+    # variants share an id and the id is stable across re-emits.
+    return sha1_hex(merge_key_, type_)
 
 
 def _edge_id(head_id: str, rel_type: str, tail_id: str, work_id: str, edition_date: str) -> str:
@@ -33,11 +39,13 @@ def _edge_id(head_id: str, rel_type: str, tail_id: str, work_id: str, edition_da
 
 def promote(snapshot: dict[str, list[dict]], overrides=None) -> Bundle:
     registry = build_registry(snapshot["chunks"], snapshot["docs"], overrides)
+    type_enum = load_type_enum()
+    aliases = load_aliases()
 
-    nodes: list[GroundedNode] = []
     quarantine: list[Quarantine] = []
-    by_name: dict[str, GroundedNode] = {}  # raw name -> node, for edge endpoint resolution
 
+    # Phase A — ground each input node (locate-or-quarantine).
+    grounded: list[dict] = []
     for n in snapshot["nodes"]:
         anchors: list[Anchor] = []
         editions: list[str] = []
@@ -55,27 +63,51 @@ def promote(snapshot: dict[str, list[dict]], overrides=None) -> Bundle:
                 works.append(chunk.work_id)
         if not anchors:
             reason = "chunk-unresolved" if chunk_missing else "entity-not-found"
-            quarantine.append(
-                Quarantine("entity", n["name"], reason, n.get("source_ids", []))
-            )
+            quarantine.append(Quarantine("entity", n["name"], reason, n.get("source_ids", [])))
             continue
+        grounded.append(
+            {
+                "name": n["name"],
+                "type": validate_type(n.get("type", "Other"), type_enum),
+                "anchors": anchors,
+                "editions": editions,
+                "works": works,
+                "source_ids": n.get("source_ids", []),
+                "concept_ref": n.get("concept_ref"),
+                "description": n.get("description", ""),
+            }
+        )
+
+    # Phase B — merge grounded nodes sharing a canonical key + type.
+    groups: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    for g in grounded:
+        groups[(merge_key(g["name"], aliases), g["type"])].append(g)
+
+    nodes: list[GroundedNode] = []
+    by_name: dict[str, GroundedNode] = {}
+    for (mkey, type_), members in groups.items():
+        names = sorted({m["name"] for m in members})
+        editions = [e for m in members for e in m["editions"]]
+        works = [w for m in members for w in m["works"]]
         edition = latest_edition(editions)
         node = GroundedNode(
-            node_id=_node_id(n["name"], n.get("type", "Other")),
-            canonical_name=n["name"],  # canonicalized in P5
-            type=n.get("type", "Other"),
-            surface_forms=[n["name"]],
+            node_id=_node_id(mkey, type_),
+            canonical_name=names[0],  # deterministic display among variants
+            type=type_,
+            surface_forms=names,
             as_of=edition,
             work_id=works[0] if works else "",
             edition_date=edition,
-            anchors=anchors,
-            source_ids=n.get("source_ids", []),
-            description=n.get("description", ""),
-            concept_ref=n.get("concept_ref"),  # propagated, never resolved here
+            anchors=[a for m in members for a in m["anchors"]],
+            source_ids=sorted({s for m in members for s in m["source_ids"]}),
+            description=next((m["description"] for m in members if m["description"]), ""),
+            concept_ref=next((m["concept_ref"] for m in members if m["concept_ref"]), None),
         )
         nodes.append(node)
-        by_name[n["name"]] = node
+        for m in members:
+            by_name[m["name"]] = node
 
+    # Phase C — edges: both endpoints admitted AND locatable in the edge's chunk.
     edges: list[GroundedEdge] = []
     for e in snapshot["edges"]:
         head, tail = by_name.get(e["head"]), by_name.get(e["tail"])
@@ -117,7 +149,7 @@ def promote(snapshot: dict[str, list[dict]], overrides=None) -> Bundle:
             )
         )
 
-    # G3: stamp supersession (older-only facts) + flag cross-edition conflicts.
+    # Phase D — edition supersession (older-only facts) + cross-edition conflicts.
     work_latest = work_latest_editions(registry)
     mark_supersession(nodes + edges, work_latest)
     flag_conflicts(edges)
