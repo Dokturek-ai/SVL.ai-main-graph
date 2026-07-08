@@ -10,7 +10,13 @@ covers every input). Edition supersession/conflict (G3) and canonicalization
 
 from __future__ import annotations
 
-from .edition import latest_edition
+from .edition import (
+    edition_sort_key,
+    flag_conflicts,
+    latest_edition,
+    mark_supersession,
+    work_latest_editions,
+)
 from .hashing import sha1_hex
 from .locate import locate
 from .registry import build_registry
@@ -78,21 +84,23 @@ def promote(snapshot: dict[str, list[dict]], overrides=None) -> Bundle:
                 Quarantine("edge", f'{e["head"]} -> {e["tail"]}', "endpoint-missing", e.get("source_ids", []))
             )
             continue
-        anchor = None
-        edition = work = ""
+        candidates: list[tuple] = []
         for sid in e.get("source_ids", []):
             chunk = registry.get(sid)
             if chunk is None:
                 continue
             ha, ta = locate(e["head"], chunk.content, sid), locate(e["tail"], chunk.content, sid)
             if ha and ta:
-                anchor, edition, work = ha, chunk.edition_date, chunk.work_id
-                break
-        if anchor is None:
+                candidates.append((chunk, ha))
+        if not candidates:
             quarantine.append(
                 Quarantine("edge", f'{e["head"]} -> {e["tail"]}', "endpoint-missing", e.get("source_ids", []))
             )
             continue
+        # An edge asserted across editions is stamped with its LATEST (current)
+        # assertion; older-only edges fall out as superseded below.
+        chunk, anchor = max(candidates, key=lambda c: edition_sort_key(c[0].edition_date))
+        edition, work = chunk.edition_date, chunk.work_id
         rel_type = e.get("rel_type") or "related"
         edges.append(
             GroundedEdge(
@@ -108,5 +116,10 @@ def promote(snapshot: dict[str, list[dict]], overrides=None) -> Bundle:
                 anchor=anchor,
             )
         )
+
+    # G3: stamp supersession (older-only facts) + flag cross-edition conflicts.
+    work_latest = work_latest_editions(registry)
+    mark_supersession(nodes + edges, work_latest)
+    flag_conflicts(edges)
 
     return Bundle(nodes=nodes, edges=edges, quarantine=quarantine)
