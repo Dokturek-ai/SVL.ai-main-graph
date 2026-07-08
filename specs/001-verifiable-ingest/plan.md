@@ -68,7 +68,8 @@ GroundedEdge  = {edge_id, head_id, rel_type, tail_id, keywords, description, as_
                  edition_date, anchor, fidelity: "verified"}         # label = source-anchored co-occurrence
 Quarantine    = {kind: "entity"|"edge", raw_name/endpoints, source_id, reason, work_id, edition_date}
 Manifest      = {content_hash, corpus:[{doc_id, work_id, edition_date, content_hash}], pins:{library_version,
-                 prompt_hash, code_sha}, counts:{nodes, edges, quarantined, anchor_coverage=1.0, doc_coverage}}
+                 prompt_hash, code_sha}, counts:{nodes, edges, quarantined, anchor_coverage=1.0, doc_coverage,
+                 orphan_rate, edge_node_ratio}}     # orphan_rate = emitted nodes with degree 0 (completeness signal)
 ```
 
 Stable ids: `node_id = sha1(canonical_name, type)`; `edge_id = sha1(head_id, rel_type, tail_id, work_id, edition_date)`. Fact-key (conflict detection) = `(canonical_head, rel_type, canonical_tail_or_attr)`.

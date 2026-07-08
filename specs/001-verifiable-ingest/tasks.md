@@ -24,7 +24,7 @@ Implements `plan.md`. One phase = one commit (no squash). `[ ]` = todo. Each tas
 ## P4 — G4 versioned bundle (hash first), then delta + ratchets
 - [ ] T040 `promotion/bundle.py`: canonical-sort records; stable ids (`node_id=sha1(name,type)`, `edge_id=sha1(head,rel,tail,work,edition)`); write `nodes.jsonl + edges.jsonl + manifest.json`; manifest = content hash over sorted records + corpus (per-doc hash + edition) + pins (library version, prompt hash, code SHA) + counts (incl. `anchor_coverage=1.0`, `doc_coverage`). → verify: `test_bundle` — re-emit of identical snapshot → **byte-identical** manifest hash; determinism holds across runs.
 - [ ] T041 `promotion/delta.py`: bundle vs previous → added/removed/changed by stable id. → verify: `test_delta` — a changed fixture yields the expected add/remove/change set; a removal with no corpus change is flagged.
-- [ ] T042 `promotion/ratchets.py`: quarantine-rate non-increasing, anchor-coverage 100%, doc-coverage non-decreasing vs the previous manifest. → verify: `test_ratchets` — a regression trips each ratchet.
+- [ ] T042 `promotion/ratchets.py`: quarantine-rate non-increasing, anchor-coverage 100%, doc-coverage non-decreasing, **orphan-rate non-increasing** vs the previous manifest; manifest counts include `orphan_rate` + `edge_node_ratio`. → verify: `test_ratchets` — a regression trips each ratchet incl. an orphan-rate spike.
 - [ ] T043 `promotion/cli.py`: `python -m promotion harvest|promote|delta`. → verify: `--help` + a fixture end-to-end run.
 - [ ] **Commit** `feat(001): G4 snapshot bundle + manifest hash + delta + ratchets`.
 
