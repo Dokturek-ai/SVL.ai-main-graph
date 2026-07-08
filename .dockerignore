@@ -21,6 +21,8 @@ build/
 
 # Exclude siles and folders
 *.yml
+# ...but ship our canonical clinical entity-extraction profile (PROMPT_DIR=/app/prompts)
+!prompts/entity_type/clinical_cs.yml
 .dockerignore
 Dockerfile
 Makefile
