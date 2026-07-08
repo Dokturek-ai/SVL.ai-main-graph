@@ -23,7 +23,9 @@ from lightrag.api.utils_api import get_combined_auth_dependency
 from lightrag.utils import logger
 
 # Corpus filenames encode the edition as `Work_YEAR.md` (e.g. `Arteriální hypertenze_2024.md`).
-_EDITION_RE = re.compile(r"_(\d{4})(?:\.|$)")
+# The year is bounded by a separator (`.`/`_`/path `/`) or end-of-string so a longer digit run
+# (`_20241`, `_20240101`) is not mistaken for a 4-digit edition, and path-form names resolve too.
+_EDITION_RE = re.compile(r"_(\d{4})(?=[._/]|$)")
 
 
 def _edition_from_filename(file_path: str) -> str:
@@ -71,7 +73,7 @@ class GuidelineRetrieveResponse(BaseModel):
     disclaimer: str = "Čerpáno výhradně z SVL doporučených postupů."
 
 
-def create_guidelines_routes(rag, api_key: Optional[str] = None, top_k: int = 5):
+def create_guidelines_routes(rag, api_key: Optional[str] = None):
     # Fresh router per call (see create_query_routes — avoids duplicate-route
     # warnings when the factory runs more than once in a process, e.g. tests).
     router = APIRouter(tags=["guidelines"])

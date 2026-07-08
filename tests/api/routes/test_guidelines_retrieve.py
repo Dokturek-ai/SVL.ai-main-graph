@@ -61,6 +61,11 @@ def test_edition_from_filename():
     assert _edition_from_filename("Foo_unknown.md") == "unknown"
     assert _edition_from_filename("Bar.md") == "unknown"
     assert _edition_from_filename("") == "unknown"
+    # bounded by a separator: path form + trailing underscore resolve; longer digit runs do not
+    assert _edition_from_filename("guidelines/Arteriální hypertenze_2024/chunk.md") == "2024"
+    assert _edition_from_filename("Foo_2024_v2.md") == "2024"
+    assert _edition_from_filename("Foo_20241.md") == "unknown"
+    assert _edition_from_filename("Foo_20240101.md") == "unknown"
 
 
 def test_caps_to_top_k():
