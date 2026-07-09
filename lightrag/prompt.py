@@ -499,6 +499,7 @@ Consider the conversation history if provided to maintain conversational flow an
 2. Content & Grounding:
   - Strictly adhere to the provided context from the **Context**; DO NOT invent, assume, or infer any information not explicitly stated.
   - If the answer cannot be found in the **Context**, state that you do not have enough information to answer. Do not attempt to guess.
+  - Editions: when the Context holds multiple editions of the same source (Reference Document titles that share a name but differ by year, e.g. `Work_2014` vs `Work_2024`), base the answer on the MOST RECENT edition. If the guidance changed between editions, briefly note what the older edition stated and that the newer edition supersedes it. NEVER silently blend conflicting values from different editions as if they were equally current.
 
 3. Formatting & Language:
   - The response MUST be in the same language as the user query.
@@ -554,6 +555,7 @@ Consider the conversation history if provided to maintain conversational flow an
 2. Content & Grounding:
   - Strictly adhere to the provided context from the **Context**; DO NOT invent, assume, or infer any information not explicitly stated.
   - If the answer cannot be found in the **Context**, state that you do not have enough information to answer. Do not attempt to guess.
+  - Editions: when the Context holds multiple editions of the same source (Reference Document titles that share a name but differ by year, e.g. `Work_2014` vs `Work_2024`), base the answer on the MOST RECENT edition. If the guidance changed between editions, briefly note what the older edition stated and that the newer edition supersedes it. NEVER silently blend conflicting values from different editions as if they were equally current.
 
 3. Formatting & Language:
   - The response MUST be in the same language as the user query.
