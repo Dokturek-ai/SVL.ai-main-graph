@@ -14,5 +14,7 @@
   tests (node chunk path, edge chunk path, fidelity split).
 - [x] T8 — fixture `README.md`: Komorbidity + edge→Komorbidity now `fidelity=chunk`.
 - [x] T9 — run `pytest tests/promotion -q -m offline`; green (38 passed).
-- [ ] T10 — caveman-review the diff; fix findings.
+- [x] T10 — caveman-review the diff; fixed F1 (edge doc co-location now uses grounding docs, not
+  raw source_ids) + regression test; F2/F3/F4 skipped with rationale (pre-existing / would break the
+  byte-identical-span guarantee / moot after F1).
 - [ ] T11 — verification brief (fresh live bundle re-run + record span/chunk split) → `docs/briefs`.

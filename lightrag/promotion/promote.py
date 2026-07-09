@@ -51,6 +51,13 @@ def _edge_id(head_id: str, rel_type: str, tail_id: str, work_id: str, edition_da
     return sha1_hex(head_id, rel_type, tail_id, work_id, edition_date)
 
 
+def _anchor_docs(node: GroundedNode, registry: dict) -> set[str]:
+    # docs the node is actually GROUNDED in (its anchors' chunks) — not merely its
+    # raw source_ids, which can name chunks in docs where it never located. Used for
+    # edge doc-level co-location so the guarantee matches the grounding.
+    return {registry[a.chunk_id].doc_id for a in node.anchors if a.chunk_id in registry}
+
+
 # MinerU sidecar block IDs (tb-/im-/eq-<dochash>-NNNN) leak into extraction as entity
 # names; they are never text and cannot ground. Drop them (and any edge that touches one)
 # before the gate so they never pollute the quarantine sidecar
@@ -207,8 +214,8 @@ def promote(snapshot: dict[str, list[dict]], overrides=None) -> Bundle:
             # No chunk holds both spans. Fall back to doc-level co-location: keep the
             # edge's own source chunks whose doc both endpoints are attributable to
             # (whole-chunk anchor). Quarantine only when they never share a doc.
-            head_docs = {registry[s].doc_id for s in head.source_ids if s in registry}
-            tail_docs = {registry[s].doc_id for s in tail.source_ids if s in registry}
+            head_docs = _anchor_docs(head, registry)
+            tail_docs = _anchor_docs(tail, registry)
             chunk_candidates = [
                 registry[sid]
                 for sid in e.get("source_ids", [])

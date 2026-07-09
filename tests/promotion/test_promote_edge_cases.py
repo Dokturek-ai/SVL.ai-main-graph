@@ -75,6 +75,24 @@ def test_endpoints_not_co_locatable_when_no_shared_doc():
 
 
 @pytest.mark.offline
+def test_doc_co_location_uses_grounding_docs_not_raw_source_ids():
+    # Alfa's source_ids name c0 (doc d0, where it locates) AND c1 (doc d1, where it
+    # does NOT). It is grounded only in d0. Beta is grounded in d1. The edge's chunk
+    # is c1 (d1): co-location must fail — Alfa was never grounded in d1 — even though
+    # Alfa's raw source_ids include a d1 chunk.
+    snap = _snap2docs(
+        nodes=[
+            {"name": "Alfa", "type": "Concept", "source_ids": ["c0", "c1"]},
+            {"name": "Beta", "type": "Concept", "source_ids": ["c1"]},
+        ],
+        edges=[{"head": "Alfa", "tail": "Beta", "rel_type": "vztah", "source_ids": ["c1"]}],
+    )
+    b = promote(snap)
+    assert not b.edges
+    assert [q.reason for q in b.quarantine if q.kind == "edge"] == ["endpoints-not-co-locatable"]
+
+
+@pytest.mark.offline
 def test_doc_level_co_location_recovers_edge_at_chunk_fidelity():
     # Both endpoints in the SAME doc but different chunks (never in one chunk): the
     # span gate would quarantine, hybrid recovers the edge at chunk fidelity.
