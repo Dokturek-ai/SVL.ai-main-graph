@@ -142,6 +142,8 @@ def create_guidelines_routes(rag, api_key: Optional[str] = None):
         endpoint to a 500 instead of crashing the server at startup.
         """
         try:
+            import asyncio
+
             from promotion import jsonl
             from promotion.bundle import build_manifest, write_bundle
             from promotion.harvest import harvest
@@ -151,13 +153,21 @@ def create_guidelines_routes(rag, api_key: Optional[str] = None):
             with tempfile.TemporaryDirectory() as tmp:
                 snap_dir = Path(tmp) / "snapshot"
                 harvest_counts = await harvest(rag, snap_dir)
-                snapshot = {
-                    name: jsonl.read_jsonl(snap_dir / f"{name}.jsonl")
-                    for name in ("docs", "chunks", "nodes", "edges")
-                }
-                bundle = promote(snapshot)
-                manifest = build_manifest(bundle, snapshot)
-                write_bundle(bundle, manifest, out_dir)
+
+                # promote()/build_manifest() iterate the whole graph and run the
+                # locate regex per anchor — CPU-bound. Run off the event loop so a
+                # large-corpus emit does not block health probes / concurrent requests.
+                def _emit():
+                    snapshot = {
+                        name: jsonl.read_jsonl(snap_dir / f"{name}.jsonl")
+                        for name in ("docs", "chunks", "nodes", "edges")
+                    }
+                    bundle = promote(snapshot)
+                    manifest = build_manifest(bundle, snapshot)
+                    write_bundle(bundle, manifest, out_dir)
+                    return manifest
+
+                manifest = await asyncio.get_running_loop().run_in_executor(None, _emit)
             return {
                 "harvest_counts": harvest_counts,
                 "content_hash": manifest.content_hash,
