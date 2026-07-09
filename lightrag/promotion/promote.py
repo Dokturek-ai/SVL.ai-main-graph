@@ -11,6 +11,7 @@ conflicts flagged (G3).
 
 from __future__ import annotations
 
+import re
 from collections import Counter, defaultdict
 
 from .canonicalize import load_aliases, load_type_enum, merge_key, validate_type
@@ -37,6 +38,19 @@ def _edge_id(head_id: str, rel_type: str, tail_id: str, work_id: str, edition_da
     return sha1_hex(head_id, rel_type, tail_id, work_id, edition_date)
 
 
+# MinerU sidecar block IDs (tb-/im-/eq-<dochash>-NNNN) leak into extraction as entity
+# names; they are never text and cannot ground. Drop them (and any edge that touches one)
+# before the gate so they never pollute the quarantine sidecar
+# (brief: guidelines-extraction-block-id-entities).
+# The dochash is a 32-char hex; require >=16 hex (case-insensitive) so a real entity
+# like `tb-abc123-01` can't be swept up, while any MinerU block id still matches.
+_BLOCK_ID_RE = re.compile(r"^(tb|im|eq)-[0-9a-f]{16,}-\d+$", re.IGNORECASE)
+
+
+def _is_block_id(name: str) -> bool:
+    return bool(name) and _BLOCK_ID_RE.match(name) is not None
+
+
 def promote(snapshot: dict[str, list[dict]], overrides=None) -> Bundle:
     registry = build_registry(snapshot["chunks"], snapshot["docs"], overrides)
     type_enum = load_type_enum()
@@ -44,9 +58,18 @@ def promote(snapshot: dict[str, list[dict]], overrides=None) -> Bundle:
 
     quarantine: list[Quarantine] = []
 
+    # Pre-filter: drop MinerU block-ID pseudo-entities (and any edge touching one)
+    # before the gate — they cannot ground and would only be quarantine noise.
+    input_nodes = [n for n in snapshot["nodes"] if not _is_block_id(n.get("name", ""))]
+    input_edges = [
+        e
+        for e in snapshot["edges"]
+        if not (_is_block_id(e.get("head", "")) or _is_block_id(e.get("tail", "")))
+    ]
+
     # Phase A — ground each input node (locate-or-quarantine).
     grounded: list[dict] = []
-    for n in snapshot["nodes"]:
+    for n in input_nodes:
         anchors: list[Anchor] = []
         editions: list[str] = []
         works: list[str] = []
@@ -129,7 +152,7 @@ def promote(snapshot: dict[str, list[dict]], overrides=None) -> Bundle:
 
     # Phase C — edges: both endpoints admitted AND locatable in the edge's chunk.
     edges: list[GroundedEdge] = []
-    for e in snapshot["edges"]:
+    for e in input_edges:
         head, tail = by_name.get(e["head"]), by_name.get(e["tail"])
         if head is None or tail is None:
             # an endpoint was itself quarantined / never extracted -> re-extract
