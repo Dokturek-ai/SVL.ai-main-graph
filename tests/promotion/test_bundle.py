@@ -21,7 +21,11 @@ def test_counts_surface_completeness(snapshot):
     c = m.counts
     assert c["anchor_coverage"] == 1.0
     assert c["doc_coverage"] == 1.0
-    assert c["quarantined"] == 3  # 2 entities + 1 edge
+    assert c["quarantined"] == 1  # only Ghost (chunk-unresolved) — hybrid recovers the rest
+    # per-fidelity split is exhaustive over emitted records
+    assert c["nodes_span"] + c["nodes_chunk"] == c["nodes"]
+    assert c["edges_span"] + c["edges_chunk"] == c["edges"]
+    assert c["nodes_chunk"] >= 1 and c["edges_chunk"] >= 1  # Komorbidity node + its edge
     # orphan_rate matches an independent recount (stable across later phases)
     degree = {n.node_id: 0 for n in b.nodes}
     for e in b.edges:
