@@ -12,15 +12,24 @@ stable forward contract but does not filter by them yet (chunks are untagged);
 `concept_ref` is echoed on the response as the dual-source key against mkn10.
 """
 
+import io
+import os
 import re
+import tempfile
+import zipfile
+from pathlib import Path
 from typing import List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from lightrag.base import QueryParam
 from lightrag.api.utils_api import get_combined_auth_dependency
 from lightrag.utils import logger
+
+# Where the promotion pass writes the immutable bundle (data volume so it survives a redeploy).
+_BUNDLE_DIR = os.getenv("PROMOTION_BUNDLE_DIR", "/app/data/promotion/bundle")
 
 # Corpus filenames encode the edition as `Work_YEAR.md` (e.g. `Arteriální hypertenze_2024.md`).
 # The year is bounded by a separator (`.`/`_`/path `/`) or end-of-string so a longer digit run
@@ -121,5 +130,72 @@ def create_guidelines_routes(rag, api_key: Optional[str] = None):
         except Exception as e:
             logger.error(f"Error in guidelines:retrieve: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail=str(e))
+
+    @router.post("/v1/guidelines:promote", dependencies=[Depends(combined_auth)])
+    async def guidelines_promote():
+        """Run the deterministic promotion pass over the live store → versioned grounded bundle (spec 001).
+
+        harvest (impure: reads the deployed PG+Neo4j store) → promote (pure G1–G5) →
+        immutable bundle written to PROMOTION_BUNDLE_DIR on the data volume. Returns the
+        manifest (content hash + completeness counts). Long-running on a large store.
+        The promotion module is imported lazily so a packaging gap degrades this one
+        endpoint to a 500 instead of crashing the server at startup.
+        """
+        try:
+            import asyncio
+
+            from promotion import jsonl
+            from promotion.bundle import build_manifest, write_bundle
+            from promotion.harvest import harvest
+            from promotion.promote import promote
+
+            out_dir = Path(_BUNDLE_DIR)
+            with tempfile.TemporaryDirectory() as tmp:
+                snap_dir = Path(tmp) / "snapshot"
+                harvest_counts = await harvest(rag, snap_dir)
+
+                # promote()/build_manifest() iterate the whole graph and run the
+                # locate regex per anchor — CPU-bound. Run off the event loop so a
+                # large-corpus emit does not block health probes / concurrent requests.
+                def _emit():
+                    snapshot = {
+                        name: jsonl.read_jsonl(snap_dir / f"{name}.jsonl")
+                        for name in ("docs", "chunks", "nodes", "edges")
+                    }
+                    bundle = promote(snapshot)
+                    manifest = build_manifest(bundle, snapshot)
+                    write_bundle(bundle, manifest, out_dir)
+                    return manifest
+
+                manifest = await asyncio.get_running_loop().run_in_executor(None, _emit)
+            return {
+                "harvest_counts": harvest_counts,
+                "content_hash": manifest.content_hash,
+                "counts": manifest.counts,
+                "corpus_size": len(manifest.corpus),
+                "bundle_dir": str(out_dir),
+            }
+        except Exception as e:
+            logger.error(f"Error in guidelines:promote: {str(e)}", exc_info=True)
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @router.get("/v1/guidelines/bundle", dependencies=[Depends(combined_auth)])
+    async def guidelines_bundle_download():
+        """Download the latest promotion bundle (nodes/edges/quarantine.jsonl + manifest.json) as a zip."""
+        out_dir = Path(_BUNDLE_DIR)
+        if not (out_dir / "manifest.json").exists():
+            raise HTTPException(status_code=404, detail="No bundle yet; POST /v1/guidelines:promote first.")
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for name in ("nodes.jsonl", "edges.jsonl", "quarantine.jsonl", "manifest.json"):
+                p = out_dir / name
+                if p.exists():
+                    zf.write(p, arcname=name)
+        buf.seek(0)
+        return StreamingResponse(
+            buf,
+            media_type="application/zip",
+            headers={"Content-Disposition": "attachment; filename=guidelines-bundle.zip"},
+        )
 
     return router
