@@ -41,8 +41,43 @@ def test_scattered_stemmed_tokens_do_not_produce_a_meaningless_anchor():
     assert locate("Srdeční selhání", chunk) is None
 
 
+def _snap2docs(nodes, edges):
+    # two isolated docs so endpoints can be made to never share a doc
+    return {
+        "docs": [
+            {"doc_id": "d0", "file_path": "A_2020.md", "status": "processed", "chunks_count": 1},
+            {"doc_id": "d1", "file_path": "B_2020.md", "status": "processed", "chunks_count": 1},
+        ],
+        "chunks": [
+            {"chunk_id": "c0", "doc_id": "d0", "file_path": "A_2020.md", "content": "Alfa je pojem.", "chunk_order_index": 0},
+            {"chunk_id": "c1", "doc_id": "d1", "file_path": "B_2020.md", "content": "Beta je pojem.", "chunk_order_index": 0},
+        ],
+        "nodes": nodes,
+        "edges": edges,
+    }
+
+
 @pytest.mark.offline
-def test_endpoints_not_co_locatable_is_a_distinct_reason():
+def test_endpoints_not_co_locatable_when_no_shared_doc():
+    # Alfa in doc d0, Beta in doc d1 — admitted (span) but they never share a doc,
+    # so not even doc-level co-location can ground the edge.
+    snap = _snap2docs(
+        nodes=[
+            {"name": "Alfa", "type": "Concept", "source_ids": ["c0"]},
+            {"name": "Beta", "type": "Concept", "source_ids": ["c1"]},
+        ],
+        edges=[{"head": "Alfa", "tail": "Beta", "rel_type": "vztah", "source_ids": ["c0"]}],
+    )
+    b = promote(snap)
+    assert len(b.nodes) == 2 and not b.edges
+    reasons = [q.reason for q in b.quarantine if q.kind == "edge"]
+    assert reasons == ["endpoints-not-co-locatable"]
+
+
+@pytest.mark.offline
+def test_doc_level_co_location_recovers_edge_at_chunk_fidelity():
+    # Both endpoints in the SAME doc but different chunks (never in one chunk): the
+    # span gate would quarantine, hybrid recovers the edge at chunk fidelity.
     snap = _snap(
         nodes=[
             {"name": "Alfa", "type": "Concept", "source_ids": ["c0"]},
@@ -52,6 +87,7 @@ def test_endpoints_not_co_locatable_is_a_distinct_reason():
         chunks=[("c0", "Alfa je pojem."), ("c1", "Beta je pojem.")],
     )
     b = promote(snap)
-    assert not b.edges
-    reasons = [q.reason for q in b.quarantine if q.kind == "edge"]
-    assert reasons == ["endpoints-not-co-locatable"]
+    assert len(b.edges) == 1
+    assert b.edges[0].fidelity == "chunk"
+    assert b.edges[0].anchor.match == "chunk"
+    assert not [q for q in b.quarantine if q.kind == "edge"]

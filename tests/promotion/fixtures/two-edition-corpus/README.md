@@ -10,9 +10,9 @@ Work: `Arteriální hypertenze`, editions **2014** and **2024** (edition parsed 
 |---|---|---|
 | exact locate | `Ramipril`, `Betablokátory`, `Arteriální hypertenze` | admitted, `match=exact`/`normalized` |
 | stemmed locate | `Srdeční selhání` (chunk says "srdečního selhání") | admitted, `match=stemmed` |
-| quarantine `entity-not-found` | `Komorbidity` (not in its chunk text) | quarantined |
-| quarantine `chunk-unresolved` | `Ghost` (`source_id` → missing chunk) | quarantined |
-| quarantine `endpoint-missing` (edge) | edge `Arteriální hypertenze→Komorbidity` | quarantined |
+| chunk fidelity (node) | `Komorbidity` (resolves but not in its chunk text) | admitted, `fidelity=chunk`, whole-chunk anchor |
+| quarantine `chunk-unresolved` | `Ghost` (`source_id` → missing chunk) | quarantined (only genuinely ungrounded) |
+| chunk fidelity (edge) | edge `Arteriální hypertenze→Komorbidity` (share a doc, no shared chunk) | admitted, `fidelity=chunk`, doc-level co-location |
 | overlap (restated) | edge `Arteriální hypertenze→Ramipril` (both editions) | one fact, not a conflict |
 | conflict | edges `→140/90 mmHg` (2014) vs `→130/80 mmHg` (2024), same `(head, rel_type)` | conflict flag |
 | supersession | `140/90 mmHg` + its edge (2014-only) | `superseded_by_edition="2024"`, out of latest-default view |

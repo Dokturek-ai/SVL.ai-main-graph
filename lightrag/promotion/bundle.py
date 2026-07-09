@@ -61,7 +61,11 @@ def _counts(bundle: Bundle, registry) -> dict[str, Any]:
     total_docs = {ch.doc_id for ch in registry.values()}
     return {
         "nodes": n,
+        "nodes_span": sum(1 for node in bundle.nodes if node.fidelity == "span"),
+        "nodes_chunk": sum(1 for node in bundle.nodes if node.fidelity == "chunk"),
         "edges": len(bundle.edges),
+        "edges_span": sum(1 for e in bundle.edges if e.fidelity == "span"),
+        "edges_chunk": sum(1 for e in bundle.edges if e.fidelity == "chunk"),
         "quarantined": len(bundle.quarantine),
         "anchor_coverage": 1.0,  # by construction — nothing enters without an anchor
         "doc_coverage": round(len(emitted_docs) / len(total_docs), 4) if total_docs else 0.0,

@@ -29,7 +29,7 @@ class Anchor:
     chunk_id: str
     start: int
     end: int
-    match: str  # "exact" | "normalized" | "stemmed"
+    match: str  # "exact" | "normalized" | "stemmed" | "chunk"
     page: Optional[int] = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -48,7 +48,7 @@ class GroundedNode:
     anchors: list[Anchor]
     source_ids: list[str]
     description: str = ""
-    fidelity: str = "verified"
+    fidelity: str = "span"  # "span" (verbatim/inflected anchor) | "chunk" (chunk-attributed)
     superseded_by_edition: Optional[str] = None
     concept_ref: Optional[dict[str, str]] = None
 
@@ -82,7 +82,7 @@ class GroundedEdge:
     work_id: str
     edition_date: str
     anchor: Anchor
-    fidelity: str = "verified"
+    fidelity: str = "span"  # "span" (endpoints co-locate in one chunk) | "chunk" (doc-level)
     superseded_by_edition: Optional[str] = None
     conflict: Optional[dict[str, Any]] = None
 
@@ -108,7 +108,9 @@ class GroundedEdge:
 class Quarantine:
     kind: str  # "entity" | "edge"
     name: str
-    reason: str  # "entity-not-found" | "endpoint-missing" | "chunk-unresolved"
+    # entity: "chunk-unresolved" (no source_id resolves — genuinely ungrounded)
+    # edge: "endpoint-quarantined" | "endpoints-not-co-locatable"
+    reason: str
     source_ids: list[str] = field(default_factory=list)
     work_id: str = ""
     edition_date: str = ""
