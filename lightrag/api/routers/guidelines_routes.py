@@ -143,6 +143,14 @@ def create_guidelines_routes(rag, api_key: Optional[str] = None):
         """
         try:
             import asyncio
+            import sys
+
+            # `promotion` is a sibling top-level package to `lightrag`. Make the repo
+            # root importable so this works whether the deploy serves from the wheel
+            # or the /app source tree (parents[3] = repo root relative to this file).
+            _root = str(Path(__file__).resolve().parents[3])
+            if _root not in sys.path:
+                sys.path.insert(0, _root)
 
             from promotion import jsonl
             from promotion.bundle import build_manifest, write_bundle
