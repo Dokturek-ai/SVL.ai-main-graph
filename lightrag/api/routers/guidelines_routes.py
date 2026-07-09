@@ -20,7 +20,7 @@ import zipfile
 from pathlib import Path
 from typing import List, Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -131,32 +131,31 @@ def create_guidelines_routes(rag, api_key: Optional[str] = None):
             logger.error(f"Error in guidelines:retrieve: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail=str(e))
 
-    @router.post("/v1/guidelines:promote", dependencies=[Depends(combined_auth)])
-    async def guidelines_promote():
-        """Run the deterministic promotion pass over the live store → versioned grounded bundle (spec 001).
+    async def _run_promotion(out_dir: Path):
+        """Harvest the live store → pure G1–G5 promote → write the immutable bundle.
 
-        harvest (impure: reads the deployed PG+Neo4j store) → promote (pure G1–G5) →
-        immutable bundle written to PROMOTION_BUNDLE_DIR on the data volume. Returns the
-        manifest (content hash + completeness counts). Long-running on a large store.
-        The promotion module is imported lazily so a packaging gap degrades this one
-        endpoint to a 500 instead of crashing the server at startup.
+        Runs in the background so the emit is not bound by the HTTP/edge request timeout
+        (harvest over a large store + per-anchor locate can exceed ~300 s). Writes a
+        status.json (running/done/failed) next to the bundle for polling.
         """
+        import asyncio
+        import json as _json
+
+        from lightrag.promotion import jsonl
+        from lightrag.promotion.bundle import build_manifest, write_bundle
+        from lightrag.promotion.harvest import harvest
+        from lightrag.promotion.promote import promote
+
+        out_dir.mkdir(parents=True, exist_ok=True)
+        status_path = out_dir / "status.json"
+        status_path.write_text(_json.dumps({"state": "running"}), encoding="utf-8")
         try:
-            import asyncio
-
-            from lightrag.promotion import jsonl
-            from lightrag.promotion.bundle import build_manifest, write_bundle
-            from lightrag.promotion.harvest import harvest
-            from lightrag.promotion.promote import promote
-
-            out_dir = Path(_BUNDLE_DIR)
             with tempfile.TemporaryDirectory() as tmp:
                 snap_dir = Path(tmp) / "snapshot"
-                harvest_counts = await harvest(rag, snap_dir)
+                await harvest(rag, snap_dir)
 
-                # promote()/build_manifest() iterate the whole graph and run the
-                # locate regex per anchor — CPU-bound. Run off the event loop so a
-                # large-corpus emit does not block health probes / concurrent requests.
+                # promote()/build_manifest() iterate the whole graph and run the locate
+                # regex per anchor — CPU-bound. Run off the event loop.
                 def _emit():
                     snapshot = {
                         name: jsonl.read_jsonl(snap_dir / f"{name}.jsonl")
@@ -168,16 +167,48 @@ def create_guidelines_routes(rag, api_key: Optional[str] = None):
                     return manifest
 
                 manifest = await asyncio.get_running_loop().run_in_executor(None, _emit)
-            return {
-                "harvest_counts": harvest_counts,
-                "content_hash": manifest.content_hash,
-                "counts": manifest.counts,
-                "corpus_size": len(manifest.corpus),
-                "bundle_dir": str(out_dir),
-            }
-        except Exception as e:
-            logger.error(f"Error in guidelines:promote: {str(e)}", exc_info=True)
-            raise HTTPException(status_code=500, detail=str(e))
+            status_path.write_text(
+                _json.dumps(
+                    {"state": "done", "content_hash": manifest.content_hash, "counts": manifest.counts}
+                ),
+                encoding="utf-8",
+            )
+            logger.info(
+                f"guidelines:promote done — hash={manifest.content_hash[:12]} counts={manifest.counts}"
+            )
+        except Exception as e:  # noqa: BLE001
+            status_path.write_text(
+                _json.dumps({"state": "failed", "error": str(e)}), encoding="utf-8"
+            )
+            logger.error(f"guidelines:promote background run failed: {str(e)}", exc_info=True)
+
+    @router.post("/v1/guidelines:promote", dependencies=[Depends(combined_auth)])
+    async def guidelines_promote(background_tasks: BackgroundTasks):
+        """Kick off the deterministic promotion pass in the background (spec 001).
+
+        harvest (impure: reads the deployed PG+Neo4j store) → pure G1–G5 promote →
+        immutable bundle on the data volume. Returns immediately; poll
+        GET /v1/guidelines/promote/status, then GET /v1/guidelines/bundle to download.
+        """
+        background_tasks.add_task(_run_promotion, Path(_BUNDLE_DIR))
+        return {
+            "status": "started",
+            "status_url": "/v1/guidelines/promote/status",
+            "bundle_url": "/v1/guidelines/bundle",
+        }
+
+    @router.get("/v1/guidelines/promote/status", dependencies=[Depends(combined_auth)])
+    async def guidelines_promote_status():
+        """Report the state of the latest background promotion run (none/running/done/failed)."""
+        import json as _json
+
+        p = Path(_BUNDLE_DIR) / "status.json"
+        if not p.exists():
+            return {"state": "none"}
+        try:
+            return _json.loads(p.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            return {"state": "unknown"}
 
     @router.get("/v1/guidelines/bundle", dependencies=[Depends(combined_auth)])
     async def guidelines_bundle_download():
