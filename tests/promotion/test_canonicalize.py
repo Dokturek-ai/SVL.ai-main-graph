@@ -1,7 +1,7 @@
 import pytest
 
-from promotion.canonicalize import load_type_enum, merge_key, validate_type
-from promotion.promote import promote
+from lightrag.promotion.canonicalize import load_type_enum, merge_key, validate_type
+from lightrag.promotion.promote import promote
 
 
 @pytest.mark.offline

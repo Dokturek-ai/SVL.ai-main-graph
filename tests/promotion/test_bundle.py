@@ -2,8 +2,8 @@ import json
 
 import pytest
 
-from promotion.bundle import build_manifest, write_bundle
-from promotion.promote import promote
+from lightrag.promotion.bundle import build_manifest, write_bundle
+from lightrag.promotion.promote import promote
 
 
 @pytest.mark.offline

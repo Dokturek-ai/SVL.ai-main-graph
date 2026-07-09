@@ -1,7 +1,7 @@
 import pytest
 
-from promotion.edition import latest_edition, parse_edition
-from promotion.registry import build_registry
+from lightrag.promotion.edition import latest_edition, parse_edition
+from lightrag.promotion.registry import build_registry
 
 
 @pytest.mark.offline

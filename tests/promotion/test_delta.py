@@ -2,8 +2,8 @@ import copy
 
 import pytest
 
-from promotion.delta import diff
-from promotion.promote import promote
+from lightrag.promotion.delta import diff
+from lightrag.promotion.promote import promote
 
 
 @pytest.mark.offline

@@ -1,7 +1,7 @@
 import pytest
 
-from promotion.edition import latest_view
-from promotion.promote import promote
+from lightrag.promotion.edition import latest_view
+from lightrag.promotion.promote import promote
 
 
 @pytest.mark.offline

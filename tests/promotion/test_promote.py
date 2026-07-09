@@ -1,6 +1,6 @@
 import pytest
 
-from promotion.promote import promote
+from lightrag.promotion.promote import promote
 
 
 @pytest.mark.offline

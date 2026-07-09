@@ -1,7 +1,7 @@
 import pytest
 
-from promotion.ratchets import check
-from promotion.types import Manifest
+from lightrag.promotion.ratchets import check
+from lightrag.promotion.types import Manifest
 
 
 def _m(**counts) -> Manifest:

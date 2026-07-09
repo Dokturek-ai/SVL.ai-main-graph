@@ -2,8 +2,8 @@
 
 import pytest
 
-from promotion.locate import locate
-from promotion.promote import promote
+from lightrag.promotion.locate import locate
+from lightrag.promotion.promote import promote
 
 
 def _snap(nodes, edges, chunks):

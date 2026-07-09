@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from promotion import jsonl
+from lightrag.promotion import jsonl
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "two-edition-corpus"
 
