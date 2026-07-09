@@ -206,4 +206,37 @@ def create_guidelines_routes(rag, api_key: Optional[str] = None):
             headers={"Content-Disposition": "attachment; filename=guidelines-bundle.zip"},
         )
 
+    @router.get("/v1/guidelines/_debug", dependencies=[Depends(combined_auth)])
+    async def guidelines_debug():
+        """TEMP: report the deployed layout to diagnose the promotion import gap."""
+        import sys
+
+        here = Path(__file__).resolve()
+        root = here.parents[3]
+
+        def _ls(p):
+            try:
+                return sorted(os.listdir(p))[:80]
+            except Exception as ex:  # noqa: BLE001
+                return f"ERR: {ex}"
+
+        try:
+            import promotion  # noqa: F401
+
+            promo = f"OK: {getattr(promotion, '__file__', '?')}"
+        except Exception as ex:  # noqa: BLE001
+            promo = f"FAIL: {ex}"
+
+        site = [p for p in sys.path if "site-packages" in p]
+        return {
+            "cwd": os.getcwd(),
+            "file": str(here),
+            "repo_root_guess": str(root),
+            "root_has_promotion": (root / "promotion").exists(),
+            "ls_repo_root": _ls(root),
+            "site_packages": {s: ("promotion" in _ls(s)) for s in site},
+            "sys_path": sys.path,
+            "import_promotion": promo,
+        }
+
     return router
