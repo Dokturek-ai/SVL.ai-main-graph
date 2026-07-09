@@ -489,6 +489,7 @@ Consider the conversation history if provided to maintain conversational flow an
 
 1. Step-by-Step Instruction:
   - Carefully determine the user's query intent in the context of the conversation history to fully understand the user's information need.
+  - If conversation history is present, treat this query as a follow-up: answer ONLY the new information the user is now asking for. Do NOT restate, re-explain, or title the answer around content already provided in a previous turn — assume the user has read it.
   - Scrutinize both `Knowledge Graph Data` and `Document Chunks` in the **Context**. Identify and extract all pieces of information that are directly relevant to answering the user query.
   - Weave the extracted facts into a coherent and logical response. Your own knowledge must ONLY be used to formulate fluent sentences and connect ideas, NOT to introduce any external information.
   - Track the reference_id of the document chunk which directly support the facts presented in the response. Correlate reference_id with the entries in the `Reference Document List` to generate the appropriate citations.
@@ -543,6 +544,7 @@ Consider the conversation history if provided to maintain conversational flow an
 
 1. Step-by-Step Instruction:
   - Carefully determine the user's query intent in the context of the conversation history to fully understand the user's information need.
+  - If conversation history is present, treat this query as a follow-up: answer ONLY the new information the user is now asking for. Do NOT restate, re-explain, or title the answer around content already provided in a previous turn — assume the user has read it.
   - Scrutinize `Document Chunks` in the **Context**. Identify and extract all pieces of information that are directly relevant to answering the user query.
   - Weave the extracted facts into a coherent and logical response. Your own knowledge must ONLY be used to formulate fluent sentences and connect ideas, NOT to introduce any external information.
   - Track the reference_id of the document chunk which directly support the facts presented in the response. Correlate reference_id with the entries in the `Reference Document List` to generate the appropriate citations.
