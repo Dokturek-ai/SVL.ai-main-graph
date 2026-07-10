@@ -1462,6 +1462,94 @@ class LightRAG(_RoleLLMMixin, _StorageMigrationMixin, _PipelineMixin):
                 pipeline_status["history_messages"].append(error_msg)
             raise e
 
+    async def areextract_document(
+        self,
+        doc_id: str,
+        entity_types_guidance: str | None = None,
+    ) -> dict[str, Any]:
+        """Re-run entity/relation extraction over a document's ALREADY-STORED chunks.
+
+        A probe for iterating the extraction prompt one document at a time (the
+        typed-oriented-edges contract's incremental loop). It re-extracts from the
+        persisted chunks — no PDF re-parse — optionally under an overridden
+        ``entity_types_guidance`` so a tightened clinical-only prompt can be trialled on
+        a single DP. Returns the entities/relations the prompt would extract, for direct
+        inspection / downstream judging.
+
+        **Does NOT mutate the knowledge graph** — no entities/relations are merged/persisted
+        (``merge_nodes_and_edges`` is not called). Like any extraction it MAY write the LLM
+        response cache and the chunk cache-tracking metadata; it never touches the graph,
+        vector stores, or doc status.
+        """
+        status = await self.doc_status.get_by_id(doc_id)
+        if not status:
+            raise ValueError(f"document not found: {doc_id}")
+        chunk_ids = normalize_string_list(
+            status.get("chunks_list", []), context=f"doc {doc_id} chunks_list"
+        )
+        if not chunk_ids:
+            raise ValueError(f"document has no stored chunks: {doc_id}")
+        fetched = await self.text_chunks.get_by_ids(chunk_ids)
+        chunks = {cid: c for cid, c in zip(chunk_ids, fetched) if c}
+        if not chunks:
+            raise ValueError(f"chunks_list references no stored chunks: {doc_id}")
+
+        # Apply the guidance override on a per-call COPY of global_config — never mutate
+        # self.addon_params (that would race concurrent probes). extract_entities reads the
+        # profile from global_config["_entity_extraction_prompt_profile"], so inject it there.
+        global_config = self._build_global_config()
+        if entity_types_guidance is not None:
+            merged_addon = {
+                **(global_config.get("addon_params") or {}),
+                "entity_types_guidance": entity_types_guidance,
+            }
+            global_config["_entity_extraction_prompt_profile"] = (
+                resolve_entity_extraction_prompt_profile(
+                    merged_addon,
+                    global_config.get("entity_extraction_use_json", False),
+                )
+            )
+        chunk_results = await extract_entities(
+            chunks,
+            global_config=global_config,
+            llm_response_cache=self.llm_response_cache,
+            text_chunks_storage=self.text_chunks,
+        )
+
+        # chunk_results: list of (maybe_nodes, maybe_edges) per chunk, where
+        # maybe_nodes = {name: [{entity_type, description, ...}, ...]} and
+        # maybe_edges = {(src, tgt): [{keywords, description, ...}, ...]}.
+        entities: list[dict[str, Any]] = []
+        relations: list[dict[str, Any]] = []
+        for maybe_nodes, maybe_edges in chunk_results:
+            for name, insts in maybe_nodes.items():
+                inst = insts[0] if insts else {}
+                entities.append(
+                    {
+                        "name": name,
+                        "type": inst.get("entity_type", "Other"),
+                        "description": (inst.get("description") or "")[:200],
+                    }
+                )
+            for (src, tgt), insts in maybe_edges.items():
+                inst = insts[0] if insts else {}
+                relations.append(
+                    {
+                        "source": src,
+                        "target": tgt,
+                        "keywords": inst.get("keywords", ""),
+                        "description": (inst.get("description") or "")[:200],
+                    }
+                )
+        return {
+            "doc_id": doc_id,
+            "chunks": len(chunks),
+            "entity_count": len(entities),
+            "relation_count": len(relations),
+            "entities": entities,
+            "relations": relations,
+        }
+
     def _index_storages(self) -> list:
         """All storages flushed together by index_done_callback / abort."""
         return [

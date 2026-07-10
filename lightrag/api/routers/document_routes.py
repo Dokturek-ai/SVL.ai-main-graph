@@ -214,6 +214,30 @@ class ReprocessResponse(BaseModel):
     )
 
 
+class ReextractRequest(BaseModel):
+    """Body for the single-document re-extract probe."""
+
+    entity_types_guidance: Optional[str] = Field(
+        default=None,
+        description="Optional entity-type guidance to override the extraction prompt for this probe only (e.g. a tightened clinical-only prompt). Omit to use the current prompt.",
+    )
+
+
+class ReextractResponse(BaseModel):
+    """Extracted entities/relations from a single-document re-extract probe (not persisted)."""
+
+    doc_id: str
+    chunks: int = Field(description="Number of stored chunks re-extracted")
+    entity_count: int
+    relation_count: int
+    entities: List[Dict[str, Any]] = Field(
+        description="Extracted entities: {name, type, description}"
+    )
+    relations: List[Dict[str, Any]] = Field(
+        description="Extracted relations: {source, target, keywords, description}"
+    )
+
+
 class CancelPipelineResponse(BaseModel):
     """Response model for pipeline cancellation operation
 
@@ -4407,6 +4431,33 @@ def create_document_routes(
 
         except Exception as e:
             logger.error(f"Error initiating reprocessing of failed documents: {str(e)}")
+            logger.error(traceback.format_exc())
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @router.post(
+        "/{doc_id}/reextract",
+        response_model=ReextractResponse,
+        dependencies=[Depends(combined_auth)],
+    )
+    async def reextract_document(doc_id: str, request: ReextractRequest):
+        """Re-extract entities/relations from ONE document's stored chunks — a probe.
+
+        Re-runs entity extraction over the document's already-persisted chunks (no PDF
+        re-parse), optionally under an overridden ``entity_types_guidance`` so a tightened
+        clinical-only prompt can be trialled on a single DP. Returns the entities/relations
+        the prompt would extract, for inspection / downstream judging. **The knowledge graph
+        is NOT mutated** (no entities/relations are persisted); like any extraction it may
+        write the LLM response cache. This is the per-document enabler for the incremental
+        extraction-tightening loop.
+        """
+        try:
+            return await rag.areextract_document(
+                doc_id, entity_types_guidance=request.entity_types_guidance
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        except Exception as e:
+            logger.error(f"Error re-extracting document {doc_id}: {str(e)}")
             logger.error(traceback.format_exc())
             raise HTTPException(status_code=500, detail=str(e))
 
