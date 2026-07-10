@@ -3721,8 +3721,13 @@ async def _contextualize_query_with_history(
         language=language,
     )
     try:
+        # Use the lightweight `keyword` role LLM (typically a smaller/faster model)
+        # for the rewrite — it is a mechanical follow-up->standalone reformulation,
+        # not answer synthesis, so it doesn't need the heavier `query` model and
+        # running it on the fast model shaves a sequential LLM hop off every
+        # follow-up query's latency.
         use_model_func = partial(
-            global_config["role_llm_funcs"]["query"], _priority=DEFAULT_QUERY_PRIORITY
+            global_config["role_llm_funcs"]["keyword"], _priority=DEFAULT_QUERY_PRIORITY
         )
         rewritten = await use_model_func(prompt, stream=False)
         rewritten = (rewritten or "").strip()

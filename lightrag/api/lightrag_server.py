@@ -871,21 +871,26 @@ def create_app(args):
             # Data migration regardless of storage implementation
             await rag.check_and_migrate_data()
 
-            # Warm up the embedding path so the FIRST real query isn't cold. On the
-            # CPU-only staging stack a cold first-query-after-deploy (bge-m3 model
-            # load in ollama + embedding worker init) stacked to ~24s and tripped the
-            # FE timeout (client closed -> HTTP 499). A one-shot embed at startup
-            # pre-loads it. Best-effort — a warmup failure must never block startup.
+            # Warm up so the FIRST real query after a (re)deploy isn't cold. A full
+            # mix-mode query pre-initializes every worker pool the first query would
+            # otherwise cold-init — embedding + keyword + query LLM + rerank — each of
+            # which logs "N new workers initialized" and adds ~1s on the first hit
+            # (originally a cold embed also tripped the FE timeout -> HTTP 499).
+            # Best-effort and bounded so a hung dependency can't stall startup up to
+            # the embedding/LLM timeout and trip the Railway health check.
             if os.getenv("WARMUP_ON_STARTUP", "true").lower() == "true":
                 import asyncio
 
+                from lightrag.base import QueryParam
+
                 try:
-                    # Bound it: a hung embedding endpoint would otherwise stall startup
-                    # up to EMBEDDING_TIMEOUT (900s) and trip the Railway health check.
-                    await asyncio.wait_for(rag.embedding_func(["warmup"]), timeout=60)
-                    logger.info("Embedding warmup complete")
+                    await asyncio.wait_for(
+                        rag.aquery("warmup", param=QueryParam(mode="mix")),
+                        timeout=90,
+                    )
+                    logger.info("Startup warmup query complete")
                 except Exception as e:  # noqa: BLE001 — warmup must never fail startup
-                    logger.warning(f"Embedding warmup skipped: {e}")
+                    logger.warning(f"Startup warmup skipped: {e}")
 
             ASCIIColors.green("\nServer is ready to accept connections! 🚀\n")
 
