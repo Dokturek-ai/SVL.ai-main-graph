@@ -34,9 +34,19 @@ def test_validate_type_is_case_insensitive_and_returns_canonical():
     assert validate_type("drug", enum) == "Drug"
     assert validate_type("labtest", enum) == "LabTest"
     assert validate_type("concept", enum) == "Concept"
-    # genuine non-clinical / layout noise still maps to Other
-    assert validate_type("table", enum) == "Other"
+    # genuinely-unknown types still map to Other
+    assert validate_type("organism", enum) == "Other"
     assert validate_type("", enum) == "Other"
+
+
+def test_validate_type_surfaces_layout_admin_types():
+    # Layout/admin artifacts (table/drawing/content) are surfaced as their own
+    # canonical type, not collapsed to "Other", so mkn10 can exclude them from
+    # disease-subject resolution (contract field #4).
+    enum = load_type_enum()
+    assert validate_type("table", enum) == "Table"
+    assert validate_type("drawing", enum) == "Drawing"
+    assert validate_type("content", enum) == "Content"
 
 
 @pytest.mark.offline
