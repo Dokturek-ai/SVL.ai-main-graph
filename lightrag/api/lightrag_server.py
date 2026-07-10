@@ -1791,7 +1791,14 @@ def create_app(args):
             func=optimized_embedding_function,
             max_token_size=final_max_token_size,
             send_dimensions=False,  # Will be set later based on binding requirements
-            model_name=model,
+            # The PG/vector table suffix is derived from model_name (base.py
+            # _generate_collection_suffix). EMBEDDING_MODEL_NAME lets it stay
+            # stable across a provider swap that changes the API model string but
+            # NOT the vector space — e.g. ollama `bge-m3:latest` -> Cloudflare
+            # `@cf/baai/bge-m3` (identical BAAI/bge-m3 vectors): set
+            # EMBEDDING_MODEL_NAME=bge-m3:latest so queries keep hitting the
+            # existing tables instead of new empty ones (no re-ingest).
+            model_name=os.environ.get("EMBEDDING_MODEL_NAME") or model,
             supports_asymmetric=provider_supports_asymmetric and asymmetric_opt_in,
         )
 
