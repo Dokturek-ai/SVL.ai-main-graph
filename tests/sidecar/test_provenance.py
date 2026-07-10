@@ -9,7 +9,16 @@ from lightrag.sidecar.provenance import (
 
 
 def _block(blockid, heading, parents, page, bbox, ptype="bbox"):
-    """A blocks.jsonl content row shaped exactly like lightrag/sidecar/writer.py."""
+    """A blocks.jsonl content row shaped exactly like lightrag/sidecar/writer.py.
+
+    Mirrors IRPosition.to_jsonable: omit ``anchor``/``range`` when None (a real
+    heading/absolute position row has no bbox keys at all).
+    """
+    pos = {"type": ptype}
+    if page is not None:
+        pos["anchor"] = page
+    if bbox is not None:
+        pos["range"] = bbox
     return {
         "type": "content",
         "blockid": blockid,
@@ -20,7 +29,7 @@ def _block(blockid, heading, parents, page, bbox, ptype="bbox"):
         "level": 2,
         "session_type": "body",
         "table_slice": "none",
-        "positions": [{"type": ptype, "anchor": page, "range": bbox}],
+        "positions": [pos],
     }
 
 
@@ -55,6 +64,12 @@ def test_missing_sidecar_or_unknown_block_returns_none():
     assert resolve_provenance(None, BLOCKS) is None
     assert resolve_provenance({}, BLOCKS) is None
     assert resolve_provenance({"refs": [{"id": "ghost"}]}, BLOCKS) is None
+
+
+@pytest.mark.offline
+def test_multimodal_sidecar_type_is_rejected():
+    # a table/drawing sidecar points at tables.json/drawings.json, not blocks.jsonl
+    assert resolve_provenance({"type": "table", "id": "b1", "refs": [{"id": "b1"}]}, BLOCKS) is None
 
 
 @pytest.mark.offline

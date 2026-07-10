@@ -24,8 +24,16 @@ _SECTION_SEP = " › "
 
 
 def _block_ids(sidecar: Any) -> list[str]:
-    """Ordered, deduped blockids referenced by a chunk's ``sidecar`` field."""
+    """Ordered, deduped blockids referenced by a chunk's ``sidecar`` field.
+
+    v1 resolves **content-block** provenance only. A multimodal chunk's sidecar is
+    ``type:"table"``/``"drawing"`` and points at ``tables.json``/``drawings.json``,
+    not ``blocks.jsonl`` — reject it explicitly rather than let its id fail to
+    resolve as a silent ``None``.
+    """
     if not isinstance(sidecar, dict):
+        return []
+    if sidecar.get("type") not in (None, "block"):
         return []
     ids: list[str] = []
     seen: set[str] = set()
@@ -73,7 +81,8 @@ def resolve_provenance(sidecar: Any, blocks_by_id: dict[str, dict]) -> dict | No
     primary = covered[0]
     pos = _bbox_position(primary)
     page = pos.get("anchor") if pos else None
-    bbox = list(pos["range"]) if pos and isinstance(pos.get("range"), list) else None
+    rng = pos.get("range") if pos else None
+    bbox = list(rng) if isinstance(rng, list) else None
 
     pages: list = []
     for b in covered:
@@ -98,14 +107,15 @@ def load_blocks_by_id(blocks_jsonl_path: str | Path) -> dict[str, dict]:
     for the endpoint layer; keep :func:`resolve_provenance` I/O-free for testing.
     """
     out: dict[str, dict] = {}
-    for line in Path(blocks_jsonl_path).read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            row = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(row, dict) and row.get("type") == "content" and row.get("blockid"):
-            out[str(row["blockid"])] = row
+    with Path(blocks_jsonl_path).open("r", encoding="utf-8") as fh:
+        for raw in fh:  # stream (matches backfill._load_content_blocks)
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(row, dict) and row.get("type") == "content" and row.get("blockid"):
+                out[str(row["blockid"])] = row
     return out
