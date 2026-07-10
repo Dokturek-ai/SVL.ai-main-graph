@@ -3869,10 +3869,17 @@ async def kg_query(
         else "Multiple Paragraphs"
     )
 
+    answer_style = PROMPTS[
+        "answer_style_verbose"
+        if query_param.answer_mode == "verbose"
+        else "answer_style_concise"
+    ]
+
     # Build system prompt
     sys_prompt_temp = system_prompt if system_prompt else PROMPTS["rag_response"]
     sys_prompt = sys_prompt_temp.format(
         response_type=response_type,
+        answer_style=answer_style,
         user_prompt=user_prompt,
         context_data=context_result.context,
     )
@@ -4840,10 +4847,17 @@ async def _build_context_str(
     )
     kg_context_tokens = len(tokenizer.encode(pre_kg_context))
 
+    answer_style = PROMPTS[
+        "answer_style_verbose"
+        if query_param.answer_mode == "verbose"
+        else "answer_style_concise"
+    ]
+
     # Calculate preliminary system prompt tokens
     pre_sys_prompt = sys_prompt_template.format(
         context_data="",  # Empty for overhead calculation
         response_type=response_type,
+        answer_style=answer_style,
         user_prompt=user_prompt,
     )
     sys_prompt_tokens = len(tokenizer.encode(pre_sys_prompt))
@@ -5748,10 +5762,16 @@ async def naive_query(
     sys_prompt_template = (
         system_prompt if system_prompt else PROMPTS["naive_rag_response"]
     )
+    answer_style = PROMPTS[
+        "answer_style_verbose"
+        if query_param.answer_mode == "verbose"
+        else "answer_style_concise"
+    ]
 
     # Create a preliminary system prompt with empty content_data to calculate overhead
     pre_sys_prompt = sys_prompt_template.format(
         response_type=response_type,
+        answer_style=answer_style,
         user_prompt=user_prompt,
         content_data="",  # Empty for overhead calculation
     )
@@ -5837,6 +5857,7 @@ async def naive_query(
 
     sys_prompt = sys_prompt_template.format(
         response_type=query_param.response_type,
+        answer_style=answer_style,
         user_prompt=user_prompt,
         content_data=context_content,
     )

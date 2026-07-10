@@ -38,6 +38,11 @@ class QueryRequest(BaseModel):
         description="Defines the response format. Examples: 'Multiple Paragraphs', 'Single Paragraph', 'Bullet Points'.",
     )
 
+    answer_mode: Optional[Literal["concise", "verbose"]] = Field(
+        default=None,
+        description="Answer verbosity: 'concise' (punchy, lead-with-the-answer; default) or 'verbose' (comprehensive, well-structured). Omit to use the server default (concise).",
+    )
+
     top_k: Optional[int] = Field(
         ge=1,
         default=None,

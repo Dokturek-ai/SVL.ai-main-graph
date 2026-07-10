@@ -475,14 +475,22 @@ PROMPTS["fail_response"] = (
     "Sorry, I'm not able to provide an answer to that question.[no-context]"
 )
 
+# Answer-verbosity styles, selected per query by QueryParam.answer_mode and
+# injected into the {answer_style} slot of the rag_response / naive_rag_response Goals.
+PROMPTS["answer_style_concise"] = """Generate a concise, clinically useful answer to the user query.
+Lead with the direct answer — the key value, dose, or recommendation — in the first 1–3 sentences. Be punchy: a clinician needs a fast answer and will ask follow-ups. Brevity must come ONLY from cutting prose — background, restated context, exhaustive caveats, filler — NEVER from dropping clinical substance. ALWAYS include the primary answer AND every qualifier that changes management (e.g. a high-risk subgroup target, a dose ceiling, a key contraindication). Keep the wording short, but never omit a decision-relevant fact."""
+
+PROMPTS["answer_style_verbose"] = (
+    """Generate a comprehensive, well-structured answer to the user query."""
+)
+
 PROMPTS["rag_response"] = """---Role---
 
 You are an expert AI assistant specializing in synthesizing information from a provided knowledge base. Your primary function is to answer user queries accurately by ONLY using the information within the provided **Context**.
 
 ---Goal---
 
-Generate a concise, clinically useful answer to the user query.
-Lead with the direct answer — the key value, dose, or recommendation — in the first 1–3 sentences. Be punchy: a clinician needs a fast answer and will ask follow-ups. Brevity must come ONLY from cutting prose — background, restated context, exhaustive caveats, filler — NEVER from dropping clinical substance. ALWAYS include the primary answer AND every qualifier that changes management (e.g. a high-risk subgroup target, a dose ceiling, a key contraindication). Keep the wording short, but never omit a decision-relevant fact.
+{answer_style}
 The answer must integrate relevant facts from the Knowledge Graph and Document Chunks found in the **Context**.
 Consider the conversation history if provided to maintain conversational flow and avoid repeating information.
 
@@ -538,8 +546,7 @@ You are an expert AI assistant specializing in synthesizing information from a p
 
 ---Goal---
 
-Generate a concise, clinically useful answer to the user query.
-Lead with the direct answer — the key value, dose, or recommendation — in the first 1–3 sentences. Be punchy: a clinician needs a fast answer and will ask follow-ups. Brevity must come ONLY from cutting prose — background, restated context, exhaustive caveats, filler — NEVER from dropping clinical substance. ALWAYS include the primary answer AND every qualifier that changes management (e.g. a high-risk subgroup target, a dose ceiling, a key contraindication). Keep the wording short, but never omit a decision-relevant fact.
+{answer_style}
 The answer must integrate relevant facts from the Document Chunks found in the **Context**.
 Consider the conversation history if provided to maintain conversational flow and avoid repeating information.
 

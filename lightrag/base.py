@@ -101,6 +101,12 @@ class QueryParam:
     response_type: str = "Multiple Paragraphs"
     """Defines the response format. Examples: 'Multiple Paragraphs', 'Single Paragraph', 'Bullet Points'."""
 
+    answer_mode: Literal["concise", "verbose"] = "concise"
+    """Answer verbosity for clinical responses:
+    - "concise": punchy, lead-with-the-answer in 1-3 sentences (default; never drops a decision-relevant fact).
+    - "verbose": comprehensive, well-structured answer.
+    Selects the {answer_style} fragment injected into the rag_response / naive_rag_response prompts."""
+
     stream: bool = False
     """If True, enables streaming output for real-time responses."""
 
