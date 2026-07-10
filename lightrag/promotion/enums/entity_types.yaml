@@ -13,3 +13,10 @@ types:
   - Person
   - Organization
   - Other
+  # Non-clinical layout/admin artifacts the extraction emits (table rows, figures,
+  # boilerplate). Surfaced as their own type — NOT collapsed to `Other` — so the
+  # downstream mkn10 harvest can EXCLUDE them from disease-subject resolution
+  # (clinical-vs-admin, contract field #4). Never a clinical fact endpoint.
+  - Table
+  - Drawing
+  - Content
