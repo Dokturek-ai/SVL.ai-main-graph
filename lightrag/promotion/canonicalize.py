@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from functools import lru_cache
 from pathlib import Path
 
 import yaml
@@ -49,5 +50,17 @@ def merge_key(name: str, aliases: dict[str, str] | None = None) -> str:
     return _WS.sub(" ", _PUNCT.sub(" ", d)).strip()
 
 
+@lru_cache(maxsize=8)
+def _canonical_by_fold(enum: frozenset[str]) -> dict[str, str]:
+    return {e.casefold(): e for e in enum}
+
+
 def validate_type(type_: str, enum: set[str]) -> str:
-    return type_ if type_ in enum else "Other"
+    """Map an extracted entity type to its canonical enum casing, case-insensitively.
+
+    Extraction emits lowercase types (``condition``, ``medication``, ``labtest``);
+    the enum is canonically cased (``Condition``, ``Medication``, ``LabTest``).
+    A case-sensitive ``in`` check collapsed every valid clinical type to ``Other``
+    (100% of promoted nodes) — match on casefold and return the canonical value.
+    """
+    return _canonical_by_fold(frozenset(enum)).get((type_ or "").casefold(), "Other")

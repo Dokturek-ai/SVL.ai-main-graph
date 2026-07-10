@@ -25,6 +25,20 @@ def test_validate_type_maps_unknown_to_other():
     assert validate_type("Organism", enum) == "Other"
 
 
+def test_validate_type_is_case_insensitive_and_returns_canonical():
+    # The extraction emits lowercase types; they must map to the canonical enum
+    # casing, not collapse to "Other" (the bug that made node.type 100% "Other").
+    enum = load_type_enum()
+    assert validate_type("condition", enum) == "Condition"
+    assert validate_type("medication", enum) == "Medication"
+    assert validate_type("drug", enum) == "Drug"
+    assert validate_type("labtest", enum) == "LabTest"
+    assert validate_type("concept", enum) == "Concept"
+    # genuine non-clinical / layout noise still maps to Other
+    assert validate_type("table", enum) == "Other"
+    assert validate_type("", enum) == "Other"
+
+
 @pytest.mark.offline
 def test_case_variants_merge_into_one_node(snapshot):
     b = promote(snapshot)
