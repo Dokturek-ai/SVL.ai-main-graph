@@ -481,7 +481,8 @@ You are an expert AI assistant specializing in synthesizing information from a p
 
 ---Goal---
 
-Generate a comprehensive, well-structured answer to the user query.
+Generate a concise, clinically useful answer to the user query.
+Lead with the direct answer — the key value, dose, or recommendation — in the first 1–3 sentences. Be punchy: a clinician needs a fast answer and will ask follow-ups, so do NOT pad with background, exhaustive caveats, or restated context; add only the qualifiers that change a clinical decision (e.g. a high-risk subgroup, a dose ceiling). Keep the whole answer short.
 The answer must integrate relevant facts from the Knowledge Graph and Document Chunks found in the **Context**.
 Consider the conversation history if provided to maintain conversational flow and avoid repeating information.
 
@@ -537,7 +538,8 @@ You are an expert AI assistant specializing in synthesizing information from a p
 
 ---Goal---
 
-Generate a comprehensive, well-structured answer to the user query.
+Generate a concise, clinically useful answer to the user query.
+Lead with the direct answer — the key value, dose, or recommendation — in the first 1–3 sentences. Be punchy: a clinician needs a fast answer and will ask follow-ups, so do NOT pad with background, exhaustive caveats, or restated context; add only the qualifiers that change a clinical decision (e.g. a high-risk subgroup, a dose ceiling). Keep the whole answer short.
 The answer must integrate relevant facts from the Document Chunks found in the **Context**.
 Consider the conversation history if provided to maintain conversational flow and avoid repeating information.
 
