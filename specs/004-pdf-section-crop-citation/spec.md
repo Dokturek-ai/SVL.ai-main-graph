@@ -1,6 +1,6 @@
 # Spec 004 — PDF section-crop citation
 
-**Status:** R1 (resolver) ✅ + R2 (retrieve provenance fields) ✅ shipped; substrate verified (sidecar+blocks ✅, PDFs ❌); R3/R4 gated on the PDF upload.
+**Status:** COMPLETE (BE) — R1 (resolver) ✅ + R2 (retrieve fields) ✅ + R3 (crop render) ✅ + R4 (PDF serve) ✅, all live-verified on staging (138 PDFs on the volume, pypdfium2 in the image). FE (`webpage`) is the only follow-up.
 **Source:** brief `docs/briefs/2026-07-10-guidelines-pdf-section-crop-citation.md` (owner-decided 2026-07-10)
 
 ## Problem
