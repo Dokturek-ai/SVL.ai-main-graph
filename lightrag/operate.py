@@ -2345,9 +2345,17 @@ def _reconcile_edge_subject(
         subject_votes.append(already_edge["subject"])
     if subject_votes:
         counts = Counter(subject_votes)
+        # most frequent (-count), tie-break by earliest appearance (index); current-batch votes
+        # precede the appended already_edge vote, so a live tie beats the stored one.
         best = min(counts, key=lambda s: (-counts[s], subject_votes.index(s)))
         if best in (src_id, tgt_id):
             return best
+        logger.debug(
+            "Edge subject `%s` is not an endpoint of `%s`~`%s` (renamed?); defaulting to source",
+            best,
+            src_id,
+            tgt_id,
+        )
     return src_id
 
 

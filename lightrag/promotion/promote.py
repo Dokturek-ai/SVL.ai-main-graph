@@ -231,10 +231,16 @@ def promote(snapshot: dict[str, list[dict]], overrides=None) -> Bundle:
             fidelity = "chunk"
         edition, work = chunk.edition_date, chunk.work_id
         rel_type = e.get("rel_type") or "related"
-        # spec 007: resolve the subject NAME to a node_id. It is head or tail (validated at extract),
-        # so it maps to one of the two resolved endpoints; None when absent/unresolved.
-        subject_node = by_name.get(e.get("subject")) if e.get("subject") else None
-        subject_id = subject_node.node_id if subject_node else None
+        # spec 007: the subject is head or tail (validated at extract). Match the NAME to an already
+        # resolved endpoint so subject_id is GUARANTEED ∈ {head_id, tail_id} — never a third node a
+        # by_name lookup could hit on a name variant/collision. None when absent/not an endpoint.
+        subject_name = e.get("subject")
+        if subject_name == e["head"]:
+            subject_id = head.node_id
+        elif subject_name == e["tail"]:
+            subject_id = tail.node_id
+        else:
+            subject_id = None
         edges.append(
             GroundedEdge(
                 edge_id=_edge_id(head.node_id, rel_type, tail.node_id, work, edition),
