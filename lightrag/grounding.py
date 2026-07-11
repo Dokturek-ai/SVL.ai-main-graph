@@ -100,11 +100,13 @@ async def neural_search_candidates(
     ``api`` is the injected HTTP fetch. The candidate ``system`` is derived from ``domain`` so a
     downstream ``concept_ref`` is already system-tagged.
     """
-    url = (
-        base_url.rstrip("/")
-        + "/v1/codes/neural-search?"
-        + urlencode({"q": name, "domain": domain, "limit": limit})
-    )
+    params: dict[str, Any] = {"q": name, "domain": domain, "limit": limit}
+    if domain != "drug":
+        # Diagnosis domains: opt in to mkn10's clinical_only chapter filter (drops injury XIX /
+        # external-cause XX poison — "Hypertenze 3. stupně" no longer collides with burn codes). Our
+        # corpus is chronic-disease; a genuine injury entity abstaining is safer than a poison code.
+        params["clinical_only"] = "true"
+    url = base_url.rstrip("/") + "/v1/codes/neural-search?" + urlencode(params)
     payload = await api(url, {"User-Agent": _BROWSER_UA, "Accept": "application/json"})
     system = _SYSTEM_BY_DOMAIN.get(domain, MKN10_SYSTEM)
     out: list[dict[str, Any]] = []
