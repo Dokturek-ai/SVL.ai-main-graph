@@ -1921,6 +1921,12 @@ async def _rebuild_single_relationship(
             pipeline_status["history_messages"].append(status_message)
 
 
+# Cap the grounding doc_context: a merged multi-fragment description can be long, and it is
+# embedded verbatim in the disambiguation prompt. 4000 chars is enough context to pick a code
+# (matches the spec-008 probe) without letting a big entity inflate the prompt.
+_GROUNDING_CONTEXT_CHAR_LIMIT = 4000
+
+
 async def _maybe_ground_concept_ref(
     entity_name: str,
     entity_type: str,
@@ -1932,7 +1938,11 @@ async def _maybe_ground_concept_ref(
     Returns a JSON-encoded ``concept_ref`` list to attach to the node, or ``None`` (grounding
     disabled, non-clinical type, an abstain, or any grounding error). Best-effort: never raises —
     grounding is enrichment, it must not block the entity upsert. ``doc_context`` = the merged
-    cross-chunk ``description``.
+    cross-chunk ``description``, capped so a many-fragment entity can't inflate the prompt.
+
+    Runs inside the caller's per-entity-name storage lock: only the *same* entity_name serializes
+    on the LLM/HTTP round-trip (it would serialize anyway); other entity names are unaffected
+    (distinct lock keys). Cache-first + default-off keep the held-lock cost off the normal path.
     """
     grounding_cfg = global_config.get("_concept_ref_grounding") or {}
     if not (grounding_cfg.get("enabled") and is_clinical_type(entity_type)):
@@ -1943,9 +1953,10 @@ async def _maybe_ground_concept_ref(
         async def _grounding_llm(prompt: str) -> str:
             return await _extract_llm(prompt)
 
+        context = (description or "")[:_GROUNDING_CONTEXT_CHAR_LIMIT]
         refs = await ground_entity_cached(
-            {"name": entity_name, "type": entity_type, "description": description},
-            description,
+            {"name": entity_name, "type": entity_type, "description": context},
+            context,
             cache=grounding_cfg["cache"],
             cache_path=grounding_cfg["cache_path"],
             llm_func=_grounding_llm,

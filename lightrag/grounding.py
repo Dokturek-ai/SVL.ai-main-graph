@@ -272,5 +272,6 @@ async def ground_entity_cached(
         limit=limit,
     )
     cache[key] = refs
-    append_resolve_cache(cache_path, key, refs)
+    # off the event loop — the write is small but the batch does thousands of them
+    await asyncio.to_thread(append_resolve_cache, cache_path, key, refs)
     return refs
