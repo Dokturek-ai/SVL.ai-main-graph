@@ -17,7 +17,6 @@ import io
 import os
 import re
 import tempfile
-import urllib.parse
 import zipfile
 from pathlib import Path
 from typing import List, Literal, Optional
@@ -28,9 +27,13 @@ from pydantic import BaseModel, Field
 
 from lightrag.base import QueryParam
 from lightrag.api.utils_api import get_combined_auth_dependency
-from lightrag.sidecar.provenance import load_blocks_by_id, resolve_provenance
+from lightrag.sidecar.passage_links import (
+    build_passage_links,
+    load_blocks_for_doc,
+    passage_provenance,
+)
+from lightrag.sidecar.provenance import resolve_provenance
 from lightrag.utils import logger
-from lightrag.utils_pipeline import parsed_artifact_dir_for
 
 # Where the promotion pass writes the immutable bundle (data volume so it survives a redeploy).
 _BUNDLE_DIR = os.getenv("PROMOTION_BUNDLE_DIR", "/app/data/promotion/bundle")
@@ -88,53 +91,13 @@ class RetrievedPassage(BaseModel):
     pdf_url: Optional[str] = None  # R4 (gated) — the full source PDF
 
 
-def _load_blocks_for_doc(file_path: str) -> Optional[dict]:
-    """Locate + load ``<doc>.parsed/*.blocks.jsonl`` for a chunk's ``file_path``; ``None`` if absent.
-
-    I/O helper — kept off :func:`resolve_provenance` (pure). Best-effort: any failure ⇒ ``None`` so the
-    passage degrades to today's citation instead of erroring the retrieve.
-    """
-    try:
-        parsed = parsed_artifact_dir_for(file_path)
-        if not parsed.exists():
-            return None
-        # Prefer the exact ``<stem>.blocks.jsonl`` (the writer's name) so a collision-suffixed sibling
-        # dir can't have us resolve against a different doc's blocks; glob only as a fallback.
-        exact = parsed / f"{Path(file_path).stem}.blocks.jsonl"
-        target = exact if exact.exists() else next(iter(sorted(parsed.glob("*.blocks.jsonl"))), None)
-        return load_blocks_by_id(str(target)) if target else None
-    except Exception as e:
-        logger.debug("section-crop: blocks load failed for %s: %s", file_path, e)
-        return None
-
-
-async def _passage_provenance(rag, chunk_id, file_path, blocks_cache, *, load_blocks=None):
-    """Resolve ``{page, pages, section, bbox}`` for a cited chunk, or ``None``.
-
-    Fetches the chunk's ``sidecar`` from the store (the ``aquery_data`` projection drops it) and joins it
-    against the doc's ``blocks.jsonl`` via the shipped resolver. ``blocks_cache`` is per-request so a doc's
-    blocks load once across its chunks. ``load_blocks`` is injectable for tests; it defaults to the
-    module-level loader looked up at call time (so it stays monkeypatch-able). All-best-effort: error ⇒
-    ``None``."""
-    loader = load_blocks if load_blocks is not None else _load_blocks_for_doc
-    try:
-        rec = await rag.text_chunks.get_by_id(chunk_id)
-    except Exception as e:
-        logger.debug("section-crop: text_chunks.get_by_id(%s) failed: %s", chunk_id, e)
-        return None
-    sidecar = (rec or {}).get("sidecar")
-    if not sidecar:
-        return None
-    if file_path not in blocks_cache:
-        blocks_cache[file_path] = loader(file_path)
-    blocks = blocks_cache[file_path]
-    if not blocks:
-        return None
-    try:
-        return resolve_provenance(sidecar, blocks)
-    except Exception as e:
-        logger.debug("section-crop: resolve_provenance failed for %s: %s", chunk_id, e)
-        return None
+# The section-crop provenance resolver moved to ``lightrag.sidecar.passage_links`` so the chat path
+# (``/query/stream`` → ``ReferenceItem.chunks``) reuses the same resolver + crop/pdf URL shape as this
+# ``:retrieve`` path. These module-level aliases keep the private names the section-crop endpoint and the
+# existing spec-004 tests reference (tests monkeypatch ``_load_blocks_for_doc``; the retrieve endpoint
+# passes it explicitly so the patch takes effect).
+_load_blocks_for_doc = load_blocks_for_doc
+_passage_provenance = passage_provenance
 
 
 def _bbox_to_px(bbox, w: int, h: int, max_coord: float = 1000.0):
@@ -222,31 +185,20 @@ def create_guidelines_routes(rag, api_key: Optional[str] = None):
                 file_path = chunk.get("file_path", "unknown_source")
                 chunk_id = chunk.get("chunk_id", "")
                 edition = _edition_from_filename(file_path)
-                prov = await _passage_provenance(rag, chunk_id, file_path, blocks_cache) or {}
-                has_page = prov.get("page") is not None
-                crop_url = (
-                    "/v1/guidelines/section-crop?"
-                    + urllib.parse.urlencode({"chunk_id": chunk_id})
-                    if (chunk_id and has_page)
-                    else None
-                )
-                pdf_name = Path(file_path).name if file_path else ""
-                pdf_url = (
-                    "/v1/guidelines/pdf?" + urllib.parse.urlencode({"doc": pdf_name})
-                    if (pdf_name and file_path != "unknown_source")
-                    else None
+                # Pass the loader explicitly so a test monkeypatching this module's
+                # ``_load_blocks_for_doc`` still drives resolution (the alias points at passage_links).
+                prov = (
+                    await passage_provenance(
+                        rag, chunk_id, file_path, blocks_cache, load_blocks=_load_blocks_for_doc
+                    )
+                    or {}
                 )
                 passages.append(
                     RetrievedPassage(
                         text=content,
                         citation=f"{file_path}#chunk={chunk_id}@{edition}",
                         score=chunk.get("score"),
-                        page=prov.get("page"),
-                        pages=prov.get("pages"),
-                        section=prov.get("section"),
-                        bbox=prov.get("bbox"),
-                        crop_url=crop_url,
-                        pdf_url=pdf_url,
+                        **build_passage_links(chunk_id, file_path, prov),
                     )
                 )
 
