@@ -1588,6 +1588,105 @@ class LightRAG(_RoleLLMMixin, _StorageMigrationMixin, _PipelineMixin):
             "relations": relations,
         }
 
+    async def areextract_document_commit(self, doc_id: str) -> dict[str, Any]:
+        """Re-extract a document's ALREADY-STORED chunks AND COMMIT to the graph (spec 012).
+
+        Unlike :meth:`areextract_document` (inspection-only), this runs the pipeline's merge stage —
+        ``extract_entities`` → ``merge_nodes_and_edges`` (which applies ``concept_ref`` grounding when
+        ``CONCEPT_REF_GROUNDING_ENABLED=true``) → ``_insert_done`` (flush). No PDF re-parse — it reuses the
+        persisted chunks. Backfills grounding onto an already-PROCESSED doc.
+
+        Merge upserts nodes by entity name and edges by ``(src, tgt)``, so re-running overlays onto the
+        existing graph nodes (adds ``concept_ref``) rather than duplicating them. Acquires the pipeline
+        ``busy`` lock and refuses if the pipeline is already busy (never merge concurrently with ingest).
+        """
+        from lightrag.kg.shared_storage import get_namespace_data, get_namespace_lock
+        from lightrag.operate import extract_entities, merge_nodes_and_edges
+
+        status = await self.doc_status.get_by_id(doc_id)
+        if not status:
+            raise ValueError(f"document not found: {doc_id}")
+        file_path = status.get("file_path", "unknown_source")
+        chunk_ids = normalize_string_list(
+            status.get("chunks_list", []), context=f"doc {doc_id} chunks_list"
+        )
+        if not chunk_ids:
+            raise ValueError(f"document has no stored chunks: {doc_id}")
+        fetched = await self.text_chunks.get_by_ids(chunk_ids)
+        chunks = {cid: c for cid, c in zip(chunk_ids, fetched) if c}
+        if not chunks:
+            raise ValueError(f"chunks_list references no stored chunks: {doc_id}")
+
+        pipeline_status = await get_namespace_data(
+            "pipeline_status", workspace=self.workspace
+        )
+        pipeline_status_lock = get_namespace_lock(
+            "pipeline_status", workspace=self.workspace
+        )
+        async with pipeline_status_lock:
+            if pipeline_status.get("busy", False):
+                raise RuntimeError(
+                    f"pipeline is busy ('{pipeline_status.get('job_name')}') — retry when idle"
+                )
+            pipeline_status.update(
+                {
+                    "busy": True,
+                    "job_name": f"reextract-commit {doc_id}",
+                    "job_start": datetime.now(timezone.utc).isoformat(),
+                    "docs": 1,
+                    "batchs": 1,
+                    "cur_batch": 0,
+                    "request_pending": False,
+                    "cancellation_requested": False,
+                    "latest_message": f"reextract-commit for document: {doc_id}",
+                }
+            )
+            pipeline_status["history_messages"][:] = [
+                f"reextract-commit for document: {doc_id}"
+            ]
+
+        try:
+            global_config = self._build_global_config()
+            chunk_results = await extract_entities(
+                chunks,
+                global_config=global_config,
+                llm_response_cache=self.llm_response_cache,
+                text_chunks_storage=self.text_chunks,
+            )
+            await merge_nodes_and_edges(
+                chunk_results=chunk_results,
+                knowledge_graph_inst=self.chunk_entity_relation_graph,
+                entity_vdb=self.entities_vdb,
+                relationships_vdb=self.relationships_vdb,
+                global_config=global_config,
+                full_entities_storage=self.full_entities,
+                full_relations_storage=self.full_relations,
+                doc_id=doc_id,
+                pipeline_status=pipeline_status,
+                pipeline_status_lock=pipeline_status_lock,
+                llm_response_cache=self.llm_response_cache,
+                entity_chunks_storage=self.entity_chunks,
+                relation_chunks_storage=self.relation_chunks,
+                current_file_number=1,
+                total_files=1,
+                file_path=file_path,
+            )
+            await self._insert_done()
+        finally:
+            async with pipeline_status_lock:
+                pipeline_status["busy"] = False
+
+        n_entities = sum(len(maybe_nodes) for maybe_nodes, _ in chunk_results)
+        n_relations = sum(len(maybe_edges) for _, maybe_edges in chunk_results)
+        return {
+            "doc_id": doc_id,
+            "file_path": file_path,
+            "chunks": len(chunks),
+            "entity_count": n_entities,
+            "relation_count": n_relations,
+            "committed": True,
+        }
+
     def _index_storages(self) -> list:
         """All storages flushed together by index_done_callback / abort."""
         return [
