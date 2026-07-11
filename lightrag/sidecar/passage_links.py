@@ -60,6 +60,8 @@ async def passage_provenance(rag, chunk_id, file_path, blocks_cache, *, load_blo
     sidecar = (rec or {}).get("sidecar")
     if not sidecar:
         return None
+    if not file_path:
+        return None  # no doc to resolve blocks against; skip the pointless loader("") + cache slot
     if file_path not in blocks_cache:
         blocks_cache[file_path] = loader(file_path)
     blocks = blocks_cache[file_path]

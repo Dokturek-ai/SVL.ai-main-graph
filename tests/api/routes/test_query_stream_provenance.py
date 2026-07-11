@@ -165,6 +165,40 @@ def test_missing_chunk_id_does_not_resolve_provenance(monkeypatch):
     assert c["page"] is None and c["crop_url"] is None
 
 
+def test_query_nonstream_references_carry_provenance(monkeypatch):
+    # The /query (non-stream) path serializes through QueryResponse/ReferenceItem (Pydantic model),
+    # not the raw-dict stream path — pin that the nested chunks survive model coercion (a silent drop
+    # here would give the FE content but no crops with no error).
+    monkeypatch.setattr(_passage_links, "load_blocks_for_doc", lambda _fp: _BLOCKS_BY_ID)
+    rag = StubRag(
+        references=[{"reference_id": "1", "file_path": "Arteriální hypertenze_2008.pdf"}],
+        chunks=[
+            {
+                "reference_id": "1",
+                "content": "Cílový TK < 140/90.",
+                "file_path": "Arteriální hypertenze_2008.pdf",
+                "chunk_id": "c1",
+            }
+        ],
+        chunk_record={"sidecar": _SIDECAR},
+    )
+    r = _client(rag).post(
+        "/query",
+        json={"query": "léčba arteriální hypertenze", "include_references": True,
+              "include_chunk_content": True},
+    )
+    assert r.status_code == 200
+    refs = r.json()["references"]
+    assert len(refs) == 1
+    chunks = refs[0]["chunks"]
+    assert len(chunks) == 1
+    c = chunks[0]
+    assert c["text"] == "Cílový TK < 140/90."
+    assert c["page"] == "13"
+    assert c["section"] == "Arteriální hypertenze › Léčba"
+    assert c["crop_url"] == "/v1/guidelines/section-crop?chunk_id=c1"
+
+
 def test_no_chunks_field_when_chunk_content_not_requested():
     rag = StubRag(
         references=[{"reference_id": "1", "file_path": "Foo_2021.pdf"}],
