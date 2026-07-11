@@ -834,7 +834,29 @@ class LightRAG(_RoleLLMMixin, _StorageMigrationMixin, _PipelineMixin):
             )
             for spec in ROLES
         }
+        global_config["_concept_ref_grounding"] = self._resolve_grounding_config()
         return global_config
+
+    def _resolve_grounding_config(self) -> dict[str, Any]:
+        """Phase-1 concept_ref grounding config (spec 009). Default OFF ⇒ a normal ingest is
+        unchanged. When enabled, the in-run resolve cache is loaded once and shared (a live dict,
+        injected here rather than via asdict so the cache accumulates across global_config builds).
+        """
+        from lightrag.grounding import load_resolve_cache
+
+        if not get_env_value("CONCEPT_REF_GROUNDING_ENABLED", False, bool):
+            return {"enabled": False}
+        cache_path = os.path.join(self.working_dir, "resolve_cache.jsonl")
+        if getattr(self, "_resolve_cache_dict", None) is None:
+            self._resolve_cache_dict = load_resolve_cache(cache_path)
+        return {
+            "enabled": True,
+            "neural_base": get_env_value(
+                "MKN10_NEURAL_BASE_URL", "https://mkn10.dokturek.ai", str
+            ),
+            "cache_path": cache_path,
+            "cache": self._resolve_cache_dict,
+        }
 
     def _build_role_llm_cache_identity(
         self, role: str, state: _RoleLLMState | None

@@ -55,6 +55,7 @@ from lightrag.base import (
     QueryContextResult,
 )
 from lightrag.chunk_schema import strip_internal_multimodal_markup_for_extraction
+from lightrag.grounding import ground_entity_cached, is_clinical_type
 from lightrag.prompt import PROMPTS, resolve_entity_extraction_prompt_profile
 from lightrag.constants import (
     GRAPH_FIELD_SEP,
@@ -1920,6 +1921,53 @@ async def _rebuild_single_relationship(
             pipeline_status["history_messages"].append(status_message)
 
 
+# Cap the grounding doc_context: a merged multi-fragment description can be long, and it is
+# embedded verbatim in the disambiguation prompt. 4000 chars is enough context to pick a code
+# (matches the spec-008 probe) without letting a big entity inflate the prompt.
+_GROUNDING_CONTEXT_CHAR_LIMIT = 4000
+
+
+async def _maybe_ground_concept_ref(
+    entity_name: str,
+    entity_type: str,
+    description: str,
+    global_config: dict,
+) -> str | None:
+    """Phase-1 concept_ref grounding for one merged node (spec 009).
+
+    Returns a JSON-encoded ``concept_ref`` list to attach to the node, or ``None`` (grounding
+    disabled, non-clinical type, an abstain, or any grounding error). Best-effort: never raises —
+    grounding is enrichment, it must not block the entity upsert. ``doc_context`` = the merged
+    cross-chunk ``description``, capped so a many-fragment entity can't inflate the prompt.
+
+    Runs inside the caller's per-entity-name storage lock: only the *same* entity_name serializes
+    on the LLM/HTTP round-trip (it would serialize anyway); other entity names are unaffected
+    (distinct lock keys). Cache-first + default-off keep the held-lock cost off the normal path.
+    """
+    grounding_cfg = global_config.get("_concept_ref_grounding") or {}
+    if not (grounding_cfg.get("enabled") and is_clinical_type(entity_type)):
+        return None
+    try:
+        _extract_llm = global_config["role_llm_funcs"]["extract"]
+
+        async def _grounding_llm(prompt: str) -> str:
+            return await _extract_llm(prompt)
+
+        context = (description or "")[:_GROUNDING_CONTEXT_CHAR_LIMIT]
+        refs = await ground_entity_cached(
+            {"name": entity_name, "type": entity_type, "description": context},
+            context,
+            cache=grounding_cfg["cache"],
+            cache_path=grounding_cfg["cache_path"],
+            llm_func=_grounding_llm,
+            neural_base=grounding_cfg["neural_base"],
+        )
+        return json.dumps(refs, ensure_ascii=False) if refs else None
+    except Exception as e:
+        logger.warning(f"concept_ref grounding failed for '{entity_name}': {e}")
+        return None
+
+
 async def _merge_nodes_then_upsert(
     entity_name: str,
     nodes_data: list[dict],
@@ -2202,6 +2250,13 @@ async def _merge_nodes_then_upsert(
         else:
             logger.debug(status_message)
 
+        # Phase-1 concept_ref grounding (spec 009): enrich a clinical node with an mkn10/ATC code
+        # the EXTRACT-role LLM picks over mkn10 neural-search candidates. Default OFF; cache-first;
+        # best-effort (a failure logs, the node upserts WITHOUT concept_ref).
+        concept_ref_json = await _maybe_ground_concept_ref(
+            entity_name, entity_type, description, global_config
+        )
+
         # 11. Update both graph and vector db
         node_data = dict(
             entity_id=entity_name,
@@ -2212,6 +2267,8 @@ async def _merge_nodes_then_upsert(
             created_at=int(time.time()),
             truncate=truncation_info,
         )
+        if concept_ref_json is not None:
+            node_data["concept_ref"] = concept_ref_json
         await knowledge_graph_inst.upsert_node(
             entity_name,
             node_data=node_data,
