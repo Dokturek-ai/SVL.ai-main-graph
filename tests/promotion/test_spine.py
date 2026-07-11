@@ -4,6 +4,7 @@ Deterministic, no network: the hash guard on load, and the code∈spine drop on 
 """
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -12,6 +13,10 @@ from lightrag.promotion.spine import (
     load_spine,
     spine_hash,
     validate_concept_refs,
+)
+
+_VENDORED_SPINE = (
+    Path(__file__).resolve().parents[2] / "lightrag/promotion/data/mkn10_spine.json"
 )
 
 _CODES = ["I10", "F320", "E11", "E11.2"]
@@ -83,3 +88,18 @@ def test_validate_empty_is_noop():
     spine = load_spine(_snapshot())
     assert validate_concept_refs(None, spine) == ([], [])
     assert validate_concept_refs([], spine) == ([], [])
+
+
+@pytest.mark.offline
+def test_vendored_spine_loads_hash_verifies_and_has_real_codes():
+    """CI guard on the shipped snapshot: it must load (hash re-derives — catches a
+    truncated/corrupted commit), and carry the real ÚZIS 2025 code set."""
+    spine = load_spine(str(_VENDORED_SPINE))
+    assert spine.version == "2025"
+    # known real MKN-10 codes the grounding probe emitted are present
+    assert "I10" in spine and "F32.8" in spine and "E26.0" in spine
+    # A well-formed but unassigned code is absent — proves the spine is a real allow-list,
+    # not "everything code-shaped". A00 subdivides only into .0/.1/.9, so .5 is unassigned.
+    # (If a future ÚZIS snapshot ever mints A00.5, swap this for another unassigned code —
+    # the intent is a shaped-but-absent sentinel, not this specific code.)
+    assert "A00.5" not in spine, "expected an unassigned, well-formed code to be absent"
