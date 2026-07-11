@@ -83,6 +83,9 @@ class GroundedEdge:
     edition_date: str
     anchor: Anchor
     fidelity: str = "span"  # "span" (endpoints co-locate in one chunk) | "chunk" (doc-level)
+    # spec 007: the endpoint the fact is ABOUT (== head_id or tail_id); the object is the other.
+    # None when the extraction carried no subject (legacy edges) — mkn10 falls back to today's behavior.
+    subject_id: Optional[str] = None
     superseded_by_edition: Optional[str] = None
     conflict: Optional[dict[str, Any]] = None
 
@@ -99,6 +102,7 @@ class GroundedEdge:
             "edition_date": self.edition_date,
             "anchor": self.anchor.to_dict(),
             "fidelity": self.fidelity,
+            "subject_id": self.subject_id,
             "superseded_by_edition": self.superseded_by_edition,
             "conflict": self.conflict,
         }

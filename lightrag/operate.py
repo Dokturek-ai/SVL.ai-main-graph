@@ -524,11 +524,11 @@ def _handle_single_relationship_extraction(
     file_path: str = "unknown_source",
 ):
     if (
-        len(record_attributes) != 5 or "relation" not in record_attributes[0]
-    ):  # treat "relationship" and "relation" interchangeable
+        len(record_attributes) not in (5, 6) or "relation" not in record_attributes[0]
+    ):  # 5 = legacy (no subject); 6 = with subject (spec 007). "relationship"~"relation" interchangeable
         if len(record_attributes) > 1 and "relation" in record_attributes[0]:
             logger.warning(
-                f"{chunk_key}: LLM output format error; found {len(record_attributes)}/5 fields on RELATION `{record_attributes[1]}`~`{record_attributes[2] if len(record_attributes) > 2 else 'N/A'}`"
+                f"{chunk_key}: LLM output format error; found {len(record_attributes)}/5-6 fields on RELATION `{record_attributes[1]}`~`{record_attributes[2] if len(record_attributes) > 2 else 'N/A'}`"
             )
             logger.debug(record_attributes)
         return None
@@ -575,11 +575,26 @@ def _handle_single_relationship_extraction(
             return None
 
         edge_source_id = chunk_key
+        # Legacy weight quirk: a description that is itself a float is read as the weight. Read from
+        # the description position (index 4), NOT [-1], so a 6-field row's `subject` is never misread.
         weight = (
-            float(record_attributes[-1].strip('"').strip("'"))
-            if is_float_regex(record_attributes[-1].strip('"').strip("'"))
+            float(record_attributes[4].strip('"').strip("'"))
+            if is_float_regex(record_attributes[4].strip('"').strip("'"))
             else 1.0
         )
+
+        # subject (spec 007): the entity the relation is ABOUT — MUST be source or target. A 6th field
+        # carries it; validate against the (already sanitized) endpoints, else default to source. A
+        # legacy 5-field row has no subject → default source. Additive; the graph stays undirected.
+        subject = source
+        if len(record_attributes) == 6:
+            subject_raw = sanitize_and_normalize_extracted_text(
+                record_attributes[5], remove_inner_quotes=True
+            )
+            if subject_raw == target:
+                subject = target
+            elif subject_raw == source:
+                subject = source
 
         return dict(
             src_id=source,
@@ -587,6 +602,7 @@ def _handle_single_relationship_extraction(
             weight=weight,
             description=edge_description,
             keywords=edge_keywords,
+            subject=subject,
             source_id=edge_source_id,
             file_path=file_path,
             timestamp=timestamp,
@@ -609,7 +625,7 @@ def _normalize_text_extraction_record_attributes(
 ) -> list[str]:
     """Recover the known text-mode failure where relation rows use the entity prefix."""
 
-    if len(record_attributes) != 5:
+    if len(record_attributes) not in (5, 6):
         return record_attributes
 
     prefix = record_attributes[0].strip().lower()
@@ -808,12 +824,23 @@ async def _process_json_extraction_result(
                 "Relation entity",
             )
 
+            # subject (spec 007): validate against the final endpoints, default to source
+            subject = truncated_source
+            subject_raw = sanitize_and_normalize_extracted_text(
+                str(rel_data.get("subject", "")), remove_inner_quotes=True
+            )
+            if subject_raw == target:
+                subject = truncated_target
+            elif subject_raw == source:
+                subject = truncated_source
+
             edge_data = dict(
                 src_id=truncated_source,
                 tgt_id=truncated_target,
                 weight=1.0,
                 description=edge_description,
                 keywords=edge_keywords,
+                subject=subject,
                 source_id=chunk_key,
                 file_path=file_path,
                 timestamp=timestamp,
@@ -2306,6 +2333,24 @@ async def _merge_nodes_then_upsert(
         )
 
 
+def _reconcile_edge_subject(
+    edges_data: list[dict], already_edge: dict | None, src_id: str, tgt_id: str
+) -> str:
+    """Pick one edge `subject` (spec 007) across merged fragments + any existing edge: most
+    frequent, tie-break first-seen. Validate it is one of the (undirected) endpoints, else default
+    to `src_id`. Additive edge DATA — survives the sorted-key merge; the graph stays undirected.
+    """
+    subject_votes = [dp["subject"] for dp in edges_data if dp.get("subject")]
+    if already_edge and already_edge.get("subject"):
+        subject_votes.append(already_edge["subject"])
+    if subject_votes:
+        counts = Counter(subject_votes)
+        best = min(counts, key=lambda s: (-counts[s], subject_votes.index(s)))
+        if best in (src_id, tgt_id):
+            return best
+    return src_id
+
+
 async def _merge_edges_then_upsert(
     src_id: str,
     tgt_id: str,
@@ -2801,6 +2846,8 @@ async def _merge_edges_then_upsert(
                             pipeline_status["latest_message"] = status_message
                             pipeline_status["history_messages"].append(status_message)
 
+        subject = _reconcile_edge_subject(edges_data, already_edge, src_id, tgt_id)
+
         edge_created_at = int(time.time())
         edge_upsert_started = time.perf_counter()
         await knowledge_graph_inst.upsert_edge(
@@ -2810,6 +2857,7 @@ async def _merge_edges_then_upsert(
                 weight=weight,
                 description=description,
                 keywords=keywords,
+                subject=subject,
                 source_id=source_id,
                 file_path=file_path,
                 created_at=edge_created_at,
@@ -2829,6 +2877,7 @@ async def _merge_edges_then_upsert(
             tgt_id=tgt_id,
             description=description,
             keywords=keywords,
+            subject=subject,
             source_id=source_id,
             file_path=file_path,
             created_at=edge_created_at,
