@@ -54,6 +54,9 @@ inputs/
 output/
 rag_storage/
 data/
+# ...but the vendored MKN-10 spine snapshot ships (promotion validates code∈spine offline, spec 008)
+!lightrag/promotion/data/
+!lightrag/promotion/data/mkn10_spine.json
 
 # User cumstomized prompt directory (dir stays local; our canonical clinical
 # profile is whitelisted so it ships with the deploy)
