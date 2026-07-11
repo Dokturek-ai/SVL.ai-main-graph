@@ -16,12 +16,13 @@ import io
 import os
 import re
 import tempfile
+import urllib.parse
 import zipfile
 from pathlib import Path
 from typing import List, Literal, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from lightrag.base import QueryParam
@@ -135,6 +136,43 @@ async def _passage_provenance(rag, chunk_id, file_path, blocks_cache, *, load_bl
         return None
 
 
+def _bbox_to_px(bbox, w: int, h: int, max_coord: float = 1000.0):
+    """MinerU bbox (normalized 0..``max_coord``, LEFTTOP origin) → pixel box on a ``w``×``h`` image.
+
+    MinerU's PDF coordinate convention is ``{"origin":"LEFTTOP","max":1000}`` — the range is a fraction
+    of the page in [0, max] with a top-left origin, so it maps to image pixels with no y-flip.
+    """
+    x0, y0, x1, y1 = (float(v) for v in bbox)
+    return (x0 / max_coord * w, y0 / max_coord * h, x1 / max_coord * w, y1 / max_coord * h)
+
+
+def _render_section_crop(pdf_path, page_number, bbox, *, scale: float = 2.0) -> bytes:
+    """Rasterize page ``page_number`` (the 1-based MinerU anchor) of the PDF, highlight the block
+    ``bbox``, return PNG bytes. Raises on a missing/out-of-range page. Imports pypdfium2/PIL lazily
+    (only when a crop is actually rendered)."""
+    import pypdfium2 as pdfium
+    from PIL import Image, ImageDraw
+
+    pdf = pdfium.PdfDocument(str(pdf_path))
+    try:
+        page_index = int(page_number) - 1  # anchor is a 1-based page NUMBER
+        if page_index < 0 or page_index >= len(pdf):
+            raise ValueError(f"page {page_number} out of range (pdf has {len(pdf)} pages)")
+        pil = pdf[page_index].render(scale=scale).to_pil().convert("RGBA")
+        if bbox and len(bbox) == 4:
+            px = _bbox_to_px(bbox, pil.width, pil.height)
+            overlay = Image.new("RGBA", pil.size, (0, 0, 0, 0))
+            ImageDraw.Draw(overlay).rectangle(
+                px, fill=(255, 235, 0, 64), outline=(220, 0, 0, 255), width=3
+            )
+            pil = Image.alpha_composite(pil, overlay)
+        buf = io.BytesIO()
+        pil.convert("RGB").save(buf, format="PNG")
+        return buf.getvalue()
+    finally:
+        pdf.close()
+
+
 class GuidelineRetrieveResponse(BaseModel):
     passages: List[RetrievedPassage]
     concept_ref: Optional[ConceptRef] = None  # echo of the request — dual-source key
@@ -176,6 +214,18 @@ def create_guidelines_routes(rag, api_key: Optional[str] = None):
                 chunk_id = chunk.get("chunk_id", "")
                 edition = _edition_from_filename(file_path)
                 prov = await _passage_provenance(rag, chunk_id, file_path, blocks_cache) or {}
+                has_page = prov.get("page") is not None
+                crop_url = (
+                    "/v1/guidelines/section-crop?"
+                    + urllib.parse.urlencode({"chunk_id": chunk_id})
+                    if (chunk_id and has_page)
+                    else None
+                )
+                pdf_url = (
+                    "/v1/guidelines/pdf?" + urllib.parse.urlencode({"doc": file_path})
+                    if (file_path and file_path != "unknown_source")
+                    else None
+                )
                 passages.append(
                     RetrievedPassage(
                         text=content,
@@ -185,6 +235,8 @@ def create_guidelines_routes(rag, api_key: Optional[str] = None):
                         pages=prov.get("pages"),
                         section=prov.get("section"),
                         bbox=prov.get("bbox"),
+                        crop_url=crop_url,
+                        pdf_url=pdf_url,
                     )
                 )
 
@@ -294,5 +346,45 @@ def create_guidelines_routes(rag, api_key: Optional[str] = None):
             media_type="application/zip",
             headers={"Content-Disposition": "attachment; filename=guidelines-bundle.zip"},
         )
+
+    @router.get("/v1/guidelines/section-crop", dependencies=[Depends(combined_auth)])
+    async def guidelines_section_crop(
+        chunk_id: str = Query(..., description="Cited chunk id (from the retrieve citation)."),
+    ):
+        """R3: the source PDF page region a cited passage came from — page N rasterized with the cited
+        block highlighted, as a PNG. Rendered live from the current sidecar (bbox never persisted)."""
+        from lightrag.utils_pipeline import configured_input_dir
+
+        chunk = await rag.text_chunks.get_by_id(chunk_id)
+        sidecar = (chunk or {}).get("sidecar")
+        if not sidecar:
+            raise HTTPException(status_code=404, detail="chunk has no provenance sidecar")
+        file_path = chunk.get("file_path", "")
+        blocks = _load_blocks_for_doc(file_path)
+        prov = resolve_provenance(sidecar, blocks) if blocks else None
+        if not prov or prov.get("page") is None:
+            raise HTTPException(status_code=404, detail="chunk has no resolvable page/bbox")
+        pdf_path = Path(configured_input_dir()) / Path(file_path).name
+        if not pdf_path.exists():
+            raise HTTPException(status_code=404, detail="source PDF not available")
+        try:
+            png = _render_section_crop(pdf_path, prov["page"], prov.get("bbox"))
+        except Exception as e:
+            logger.warning("section-crop render failed for %s: %s", chunk_id, e)
+            raise HTTPException(status_code=500, detail="crop render failed")
+        return Response(content=png, media_type="image/png")
+
+    @router.get("/v1/guidelines/pdf", dependencies=[Depends(combined_auth)])
+    async def guidelines_pdf(
+        doc: str = Query(..., description="Source document file_path / name."),
+    ):
+        """R4: serve the full source PDF (so the crop click-through opens the document)."""
+        from lightrag.utils_pipeline import configured_input_dir
+
+        name = Path(doc).name  # basename only — no path traversal
+        pdf_path = Path(configured_input_dir()) / name
+        if not name.lower().endswith(".pdf") or not pdf_path.exists():
+            raise HTTPException(status_code=404, detail="PDF not found")
+        return FileResponse(str(pdf_path), media_type="application/pdf", filename=name)
 
     return router

@@ -199,10 +199,41 @@ def test_retrieve_populates_provenance(monkeypatch):
     assert p["page"] == "13"
     assert p["section"] == "Arteriální hypertenze › Léčba"
     assert p["bbox"] == [75.0, 481.0, 443.0, 500.0]
-    assert p["crop_url"] is None and p["pdf_url"] is None  # gated on PDF upload
+    # provenance present ⇒ crop + PDF links populated (R3/R4)
+    assert p["crop_url"] == "/v1/guidelines/section-crop?chunk_id=c1"
+    assert p["pdf_url"].startswith("/v1/guidelines/pdf?doc=")
 
 
 def test_retrieve_provenance_degrades_when_no_substrate():
     # StubRag with no text_chunks store → provenance fields null, citation unchanged
     p = _post(make_client([_chunk("x", "Foo_2021.md", "c1")]), top_k=1).json()["passages"][0]
     assert p["page"] is None and p["section"] is None and p["bbox"] is None
+    assert p["crop_url"] is None  # no page ⇒ no crop link
+    assert p["pdf_url"] == "/v1/guidelines/pdf?doc=Foo_2021.md"  # PDF link offered whenever file_path known
+
+
+# --- crop render (R3) + PDF serve (R4) ---
+
+_bbox_to_px = _guidelines_routes._bbox_to_px
+
+
+def test_bbox_to_px_normalized_lefttop():
+    # normalized 0..1000 LEFTTOP → fraction × image dims, no y-flip
+    assert _bbox_to_px([0, 0, 1000, 1000], 100, 200) == (0.0, 0.0, 100.0, 200.0)
+    assert _bbox_to_px([75, 481, 443, 500], 1000, 1000) == (75.0, 481.0, 443.0, 500.0)
+    assert _bbox_to_px([500, 250, 750, 500], 200, 400) == (100.0, 100.0, 150.0, 200.0)
+
+
+def test_section_crop_404_when_no_sidecar():
+    rag = StubRag([_chunk("x", "Foo.pdf", "c1")], chunk_record={"content": "x"})  # no sidecar
+    app = FastAPI()
+    app.include_router(create_guidelines_routes(rag, api_key=None))
+    r = TestClient(app).get("/v1/guidelines/section-crop", params={"chunk_id": "c1"})
+    assert r.status_code == 404
+
+
+def test_pdf_404_when_absent():
+    app = FastAPI()
+    app.include_router(create_guidelines_routes(StubRag([]), api_key=None))
+    r = TestClient(app).get("/v1/guidelines/pdf", params={"doc": "Nonexistent_9999.pdf"})
+    assert r.status_code == 404
