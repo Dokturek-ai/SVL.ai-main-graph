@@ -86,6 +86,8 @@ async def test_neural_search_candidates_parses_and_sets_ua_and_query():
     ]
     url, headers = calls[0]
     assert "q=deprese" in url and "domain=mkn10" in url and "limit=4" in url
+    # diagnosis domains opt in to mkn10's chapter filter (drops injury/external-cause poison)
+    assert "clinical_only=true" in url
     assert headers["User-Agent"] == _BROWSER_UA
 
 
@@ -94,15 +96,18 @@ async def test_neural_search_drug_domain_uses_atc_system_and_atc5_fallback():
     payload = {
         "results": [{"atc5": "C08CA01", "inn": "AMLODIPIN", "score_fused": 0.03}]
     }
+    calls = []
     cands = await neural_search_candidates(
         "amlodipin",
         "drug",
         base_url="https://mkn10.example",
-        api=_canned_api(payload, []),
+        api=_canned_api(payload, calls),
     )
     assert cands == [
         {"code": "C08CA01", "display": "AMLODIPIN", "score": 0.03, "system": ATC_SYSTEM}
     ]
+    # drug domain must NOT send clinical_only (it dodges the poison band via domain routing already)
+    assert "clinical_only" not in calls[0][0]
 
 
 @pytest.mark.offline
