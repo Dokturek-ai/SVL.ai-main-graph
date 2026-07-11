@@ -112,20 +112,21 @@ def _bbox_to_px(bbox, w: int, h: int, max_coord: float = 1000.0):
 
 def _render_section_crop(pdf_path, page_number, bbox, *, scale: float = 2.0) -> bytes:
     """Rasterize page ``page_number`` (the 1-based MinerU anchor) of the PDF, highlight the block
-    ``bbox``, return PNG bytes. Raises on a missing/out-of-range page. Imports pypdfium2/PIL lazily
-    (only when a crop is actually rendered)."""
-    import pypdfium2 as pdfium
+    ``bbox``, return PNG bytes. Raises on a missing/out-of-range page. Imports PyMuPDF/PIL lazily.
+
+    Uses PyMuPDF (fitz), NOT pypdfium2: fitz bundles its own fonts, so it renders correctly in the minimal
+    deployment container where pypdfium2/PDFium falls back to (absent) system fonts and garbles Czech
+    diacritics (č/ř/ě → blank, á→Æ, é→Ø)."""
+    import fitz
     from PIL import Image, ImageDraw
 
-    pdf = pdfium.PdfDocument(str(pdf_path))
-    page = bitmap = None
+    doc = fitz.open(str(pdf_path))
     try:
         page_index = int(page_number) - 1  # anchor is a 1-based page NUMBER
-        if page_index < 0 or page_index >= len(pdf):
-            raise ValueError(f"page {page_number} out of range (pdf has {len(pdf)} pages)")
-        page = pdf[page_index]
-        bitmap = page.render(scale=scale)
-        pil = bitmap.to_pil().convert("RGBA")
+        if page_index < 0 or page_index >= len(doc):
+            raise ValueError(f"page {page_number} out of range (pdf has {len(doc)} pages)")
+        pix = doc[page_index].get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
+        pil = Image.frombytes("RGB", (pix.width, pix.height), pix.samples).convert("RGBA")
         if bbox and len(bbox) == 4:
             px = _bbox_to_px(bbox, pil.width, pil.height)
             overlay = Image.new("RGBA", pil.size, (0, 0, 0, 0))
@@ -137,12 +138,7 @@ def _render_section_crop(pdf_path, page_number, bbox, *, scale: float = 2.0) -> 
         pil.convert("RGB").save(buf, format="PNG")
         return buf.getvalue()
     finally:
-        # release native pdfium handles explicitly (pdf.close() doesn't close open child pages)
-        if bitmap is not None:
-            bitmap.close()
-        if page is not None:
-            page.close()
-        pdf.close()
+        doc.close()
 
 
 class GuidelineRetrieveResponse(BaseModel):

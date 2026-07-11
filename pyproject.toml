@@ -34,7 +34,7 @@ dependencies = [
     "Pillow",
     "pipmaster",
     "pydantic",
-    "pypdfium2",
+    "pymupdf",  # section-crop render: bundles fonts (pypdfium2 garbled Czech glyphs in the fontless container)
     "pypinyin",
     "PyYAML>=6.0,<7.0",
     "python-dotenv",
