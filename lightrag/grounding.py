@@ -21,11 +21,14 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import re
 import urllib.request
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 from urllib.parse import urlencode
+
+logger = logging.getLogger(__name__)
 
 # Canonical coding-system URIs (authoritative: docs/research/fhir-identity-coding-standard-2026-06.md;
 # mkn10 uses the ÚZIS terminology URI, NOT the HL7 `.../sid/icd-10`).
@@ -196,8 +199,15 @@ def build_verify_prompt(
 
 
 def parse_verdict(llm_text: str) -> bool:
-    """``True`` = KEEP, ``False`` = DROP. Anything not clearly KEEP ⇒ DROP (abstain-on-uncertainty)."""
-    return (llm_text or "").strip().upper().startswith("KEEP")
+    """``True`` = KEEP, ``False`` = DROP. Scans for the first line starting KEEP/DROP (so a preamble
+    line before the verdict doesn't misread); no clear verdict ⇒ ``False`` (abstain-on-uncertainty)."""
+    for line in (llm_text or "").splitlines():
+        s = line.strip().upper()
+        if s.startswith("KEEP"):
+            return True
+        if s.startswith("DROP"):
+            return False
+    return False
 
 
 async def verify_concept_ref(
@@ -254,20 +264,29 @@ async def ground_entity(
                 entity, refs[0], doc_context, verify_llm_func=verify_llm_func
             ):
                 return []  # judge dropped it — abstain (verify-or-abstain)
-        except Exception:
-            return []  # judge failure ⇒ abstain, never write an unverified code
+        except Exception as e:
+            # judge failure ⇒ abstain, never write an unverified code. Log it: a systematically
+            # misconfigured judge (bad model/key) would otherwise silently zero-drop every code.
+            logger.warning("concept_ref verify judge failed for '%s' (abstaining): %s", name, e)
+            return []
     return refs
 
 
 # --- resolve cache (spec 009): cache-first so re-runs skip the LLM + neural-search ------------
 
 
-def resolve_cache_key(name: str, node_type: str, description: str) -> str:
-    """Stable key over ``name|type|description`` (whitespace-collapsed, lowercased)."""
+def resolve_cache_key(
+    name: str, node_type: str, description: str, verified: bool = False
+) -> str:
+    """Stable key over ``name|type|description`` (whitespace-collapsed, lowercased), discriminated by
+    whether the result was verified (spec 010). A pre-verify (spec 009) cache entry therefore has a
+    DIFFERENT key than a verify-on lookup, so an unverified code can never be served past the judge."""
     norm = "|".join(
         " ".join((part or "").split()).lower()
         for part in (name, node_type, description)
     )
+    if verified:
+        norm += "|v"
     return hashlib.sha256(norm.encode("utf-8")).hexdigest()
 
 
@@ -323,7 +342,9 @@ async def ground_entity_cached(
     name = entity.get("name") or entity.get("entity_name") or ""
     node_type = entity.get("type") or entity.get("entity_type") or ""
     description = entity.get("description") or ""
-    key = resolve_cache_key(name, node_type, description)
+    key = resolve_cache_key(
+        name, node_type, description, verified=verify_llm_func is not None
+    )
     if key in cache:
         return cache[key]
     refs = await ground_entity(

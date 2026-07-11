@@ -363,6 +363,21 @@ def test_parse_verdict(text, expected):
 
 
 @pytest.mark.offline
+def test_parse_verdict_finds_verdict_after_preamble_line():
+    # a judge that prefaces the verdict with a line must not be misread as DROP
+    assert parse_verdict("Analýza:\nKEEP | kód sedí") is True
+    assert parse_verdict("Zvažuji...\nDROP | špatná kategorie") is False
+
+
+@pytest.mark.offline
+def test_verified_cache_key_differs_from_unverified():
+    # a pre-verify (spec 009) cache entry cannot be served past the spec-010 judge
+    assert resolve_cache_key("Deprese", "condition", "d", verified=True) != resolve_cache_key(
+        "Deprese", "condition", "d", verified=False
+    )
+
+
+@pytest.mark.offline
 async def test_verify_concept_ref_keep_and_drop():
     ref = {"system": MKN10_SYSTEM, "code": "F32.8", "display": "d"}
 
