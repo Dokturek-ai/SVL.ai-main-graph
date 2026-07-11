@@ -96,9 +96,13 @@ def _load_blocks_for_doc(file_path: str) -> Optional[dict]:
         parsed = parsed_artifact_dir_for(file_path)
         if not parsed.exists():
             return None
-        files = sorted(parsed.glob("*.blocks.jsonl"))
-        return load_blocks_by_id(str(files[0])) if files else None
-    except Exception:
+        # Prefer the exact ``<stem>.blocks.jsonl`` (the writer's name) so a collision-suffixed sibling
+        # dir can't have us resolve against a different doc's blocks; glob only as a fallback.
+        exact = parsed / f"{Path(file_path).stem}.blocks.jsonl"
+        target = exact if exact.exists() else next(iter(sorted(parsed.glob("*.blocks.jsonl"))), None)
+        return load_blocks_by_id(str(target)) if target else None
+    except Exception as e:
+        logger.debug("section-crop: blocks load failed for %s: %s", file_path, e)
         return None
 
 
@@ -113,7 +117,8 @@ async def _passage_provenance(rag, chunk_id, file_path, blocks_cache, *, load_bl
     loader = load_blocks if load_blocks is not None else _load_blocks_for_doc
     try:
         rec = await rag.text_chunks.get_by_id(chunk_id)
-    except Exception:
+    except Exception as e:
+        logger.debug("section-crop: text_chunks.get_by_id(%s) failed: %s", chunk_id, e)
         return None
     sidecar = (rec or {}).get("sidecar")
     if not sidecar:
@@ -125,7 +130,8 @@ async def _passage_provenance(rag, chunk_id, file_path, blocks_cache, *, load_bl
         return None
     try:
         return resolve_provenance(sidecar, blocks)
-    except Exception:
+    except Exception as e:
+        logger.debug("section-crop: resolve_provenance failed for %s: %s", chunk_id, e)
         return None
 
 
