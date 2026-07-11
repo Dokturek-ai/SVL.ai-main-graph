@@ -843,12 +843,27 @@ class LightRAG(_RoleLLMMixin, _StorageMigrationMixin, _PipelineMixin):
         injected here rather than via asdict so the cache accumulates across global_config builds).
         """
         from lightrag.grounding import load_resolve_cache
+        from lightrag.llm.openai import openai_complete_if_cache
 
         if not get_env_value("CONCEPT_REF_GROUNDING_ENABLED", False, bool):
             return {"enabled": False}
         cache_path = os.path.join(self.working_dir, "resolve_cache.jsonl")
         if getattr(self, "_resolve_cache_dict", None) is None:
             self._resolve_cache_dict = load_resolve_cache(cache_path)
+
+        # verify-or-abstain judge (spec 010): a stronger model than the recall-first pick. Same LLM
+        # binding as extract, a distinct model. None host/key ⇒ openai_complete_if_cache uses its env.
+        verify_model = get_env_value(
+            "CONCEPT_REF_VERIFY_MODEL", "gpt-5.1-2025-11-13", str
+        )
+        verify_host = get_env_value("LLM_BINDING_HOST", None, str, special_none=True)
+        verify_key = get_env_value("LLM_BINDING_API_KEY", None, str, special_none=True)
+
+        async def _verify_llm(prompt: str) -> str:
+            return await openai_complete_if_cache(
+                verify_model, prompt, base_url=verify_host, api_key=verify_key
+            )
+
         return {
             "enabled": True,
             "neural_base": get_env_value(
@@ -856,6 +871,7 @@ class LightRAG(_RoleLLMMixin, _StorageMigrationMixin, _PipelineMixin):
             ),
             "cache_path": cache_path,
             "cache": self._resolve_cache_dict,
+            "verify_llm": _verify_llm,
         }
 
     def _build_role_llm_cache_identity(

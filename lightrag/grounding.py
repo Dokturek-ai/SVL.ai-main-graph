@@ -21,11 +21,14 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import re
 import urllib.request
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 from urllib.parse import urlencode
+
+logger = logging.getLogger(__name__)
 
 # Canonical coding-system URIs (authoritative: docs/research/fhir-identity-coding-standard-2026-06.md;
 # mkn10 uses the ÚZIS terminology URI, NOT the HL7 `.../sid/icd-10`).
@@ -167,6 +170,62 @@ def parse_concept_ref(
     return []
 
 
+# --- verify-or-abstain (spec 010): the pick's mirror — a context judge keeps or drops the picked code.
+# The spine guard is existence-only and cannot catch a VALID-but-wrong-context code (a drug class grounded
+# to a specific drug, a symptom grounded to a diagnosis, a procedure grounded to a real-but-wrong Z-code).
+# Verifiable-AI: the grounding LLM is not the last writer — verify before the concept_ref is written.
+
+
+def build_verify_prompt(
+    name: str,
+    node_type: str,
+    description: str,
+    ref: dict[str, str],
+    doc_context: str,
+) -> str:
+    """The judge prompt: does the picked code correctly represent THIS entity in context?"""
+    return (
+        "Jsi klinický kodér-auditor. Ověř, zda přiřazený kód SPRÁVNĚ reprezentuje entitu "
+        "v kontextu klinického doporučeného postupu.\n\n"
+        f'Entita: "{name}" (typ: {node_type})\n'
+        f"Popis: {description}\n"
+        f"Kontext: {doc_context}\n"
+        f"Přiřazený kód: {ref.get('code', '')} — {ref.get('display', '')}\n\n"
+        "Zvaž: Odpovídá kód klinickému významu entity? NENÍ to validní kód ze ŠPATNÉ kategorie "
+        "(homonym / jiný koncept, který náhodou existuje)? NENÍ entita léčebná metoda / výkon / "
+        "vyšetření, kterému MKN-10 diagnostický kód nepřísluší?\n\n"
+        "Odpověz PŘESNĚ jedním řádkem: `KEEP | důvod`  nebo  `DROP | důvod`."
+    )
+
+
+def parse_verdict(llm_text: str) -> bool:
+    """``True`` = KEEP, ``False`` = DROP. Scans for the first line starting KEEP/DROP (so a preamble
+    line before the verdict doesn't misread); no clear verdict ⇒ ``False`` (abstain-on-uncertainty)."""
+    for line in (llm_text or "").splitlines():
+        s = line.strip().upper()
+        if s.startswith("KEEP"):
+            return True
+        if s.startswith("DROP"):
+            return False
+    return False
+
+
+async def verify_concept_ref(
+    entity: dict[str, Any],
+    ref: dict[str, str],
+    doc_context: str,
+    *,
+    verify_llm_func: LlmFunc,
+) -> bool:
+    """One judge call for a picked ``concept_ref``. ``True`` = keep, ``False`` = drop."""
+    name = entity.get("name") or entity.get("entity_name") or ""
+    node_type = entity.get("type") or entity.get("entity_type") or ""
+    description = entity.get("description") or ""
+    prompt = build_verify_prompt(name, node_type, description, ref, doc_context)
+    resp = await verify_llm_func(prompt)
+    return parse_verdict(resp)
+
+
 async def ground_entity(
     entity: dict[str, Any],
     doc_context: str,
@@ -175,11 +234,13 @@ async def ground_entity(
     neural_base: str,
     api: HttpGetJson = _default_http_get_json,
     limit: int = 4,
+    verify_llm_func: Optional[LlmFunc] = None,
 ) -> list[dict[str, str]]:
     """Ground one entity → a ``concept_ref`` list (or ``[]`` on abstain / no candidates).
 
     ``entity`` accepts either extraction (``entity_name``/``entity_type``) or graph
-    (``name``/``type``) field names.
+    (``name``/``type``) field names. When ``verify_llm_func`` is given, the picked code is judged
+    (verify-or-abstain, spec 010) and dropped ⇒ ``[]`` unless it survives; a judge error also abstains.
     """
     name = entity.get("name") or entity.get("entity_name") or ""
     node_type = entity.get("type") or entity.get("entity_type") or ""
@@ -195,18 +256,37 @@ async def ground_entity(
         name, node_type, description, candidates, doc_context
     )
     resp = await llm_func(prompt)
-    return parse_concept_ref(resp, candidates)
+    refs = parse_concept_ref(resp, candidates)
+
+    if refs and verify_llm_func is not None:
+        try:
+            if not await verify_concept_ref(
+                entity, refs[0], doc_context, verify_llm_func=verify_llm_func
+            ):
+                return []  # judge dropped it — abstain (verify-or-abstain)
+        except Exception as e:
+            # judge failure ⇒ abstain, never write an unverified code. Log it: a systematically
+            # misconfigured judge (bad model/key) would otherwise silently zero-drop every code.
+            logger.warning("concept_ref verify judge failed for '%s' (abstaining): %s", name, e)
+            return []
+    return refs
 
 
 # --- resolve cache (spec 009): cache-first so re-runs skip the LLM + neural-search ------------
 
 
-def resolve_cache_key(name: str, node_type: str, description: str) -> str:
-    """Stable key over ``name|type|description`` (whitespace-collapsed, lowercased)."""
+def resolve_cache_key(
+    name: str, node_type: str, description: str, verified: bool = False
+) -> str:
+    """Stable key over ``name|type|description`` (whitespace-collapsed, lowercased), discriminated by
+    whether the result was verified (spec 010). A pre-verify (spec 009) cache entry therefore has a
+    DIFFERENT key than a verify-on lookup, so an unverified code can never be served past the judge."""
     norm = "|".join(
         " ".join((part or "").split()).lower()
         for part in (name, node_type, description)
     )
+    if verified:
+        norm += "|v"
     return hashlib.sha256(norm.encode("utf-8")).hexdigest()
 
 
@@ -250,17 +330,21 @@ async def ground_entity_cached(
     neural_base: str,
     api: HttpGetJson = _default_http_get_json,
     limit: int = 4,
+    verify_llm_func: Optional[LlmFunc] = None,
 ) -> list[dict[str, str]]:
-    """Cache-first ``ground_entity``. A hit returns the cached ``concept_ref`` with NO LLM/HTTP call;
-    a miss grounds, updates the in-run ``cache`` dict, and appends to ``cache_path``.
+    """Cache-first ``ground_entity`` (pick + optional verify, spec 010). A hit returns the cached
+    (verified) ``concept_ref`` with NO LLM/HTTP call; a miss grounds + verifies, updates the in-run
+    ``cache`` dict, and appends to ``cache_path``. The cached value is the VERIFIED result.
 
-    Abstains (``[]``) are cached too — an entity that failed to ground once should not re-spend the
+    Abstains (``[]``) are cached too — an entity that failed to ground/verify once should not re-spend the
     LLM/mkn10 on the same ``(name, type, description)`` within/across runs.
     """
     name = entity.get("name") or entity.get("entity_name") or ""
     node_type = entity.get("type") or entity.get("entity_type") or ""
     description = entity.get("description") or ""
-    key = resolve_cache_key(name, node_type, description)
+    key = resolve_cache_key(
+        name, node_type, description, verified=verify_llm_func is not None
+    )
     if key in cache:
         return cache[key]
     refs = await ground_entity(
@@ -270,6 +354,7 @@ async def ground_entity_cached(
         neural_base=neural_base,
         api=api,
         limit=limit,
+        verify_llm_func=verify_llm_func,
     )
     cache[key] = refs
     # off the event loop — the write is small but the batch does thousands of them

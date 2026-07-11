@@ -1988,6 +1988,7 @@ async def _maybe_ground_concept_ref(
             cache_path=grounding_cfg["cache_path"],
             llm_func=_grounding_llm,
             neural_base=grounding_cfg["neural_base"],
+            verify_llm_func=grounding_cfg.get("verify_llm"),  # spec 010: verify-or-abstain
         )
         return json.dumps(refs, ensure_ascii=False) if refs else None
     except Exception as e:
