@@ -4462,6 +4462,28 @@ def create_document_routes(
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.post(
+        "/{doc_id}/reextract-commit",
+        dependencies=[Depends(combined_auth)],
+    )
+    async def reextract_commit_document(doc_id: str):
+        """Re-extract ONE document's stored chunks AND COMMIT to the graph (spec 012).
+
+        Unlike ``/reextract`` (inspection-only), this runs the merge stage so ``concept_ref`` grounding
+        (when ``CONCEPT_REF_GROUNDING_ENABLED=true``) is applied and persisted — backfilling grounding
+        onto an already-processed doc without a PDF re-parse. Refuses (409) if the pipeline is busy.
+        """
+        try:
+            return await rag.areextract_document_commit(doc_id)
+        except ValueError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        except RuntimeError as e:
+            raise HTTPException(status_code=409, detail=str(e))
+        except Exception as e:
+            logger.error(f"Error reextract-committing document {doc_id}: {str(e)}")
+            logger.error(traceback.format_exc())
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @router.post(
         "/cancel_pipeline",
         response_model=CancelPipelineResponse,
         dependencies=[Depends(combined_auth)],
