@@ -74,6 +74,7 @@ async def harvest(rag: Any, out_dir: str | Path) -> dict[str, int]:
             "rel_type": (_prop(e, "keywords") or "related").split(",")[0].strip(),
             "keywords": _prop(e, "keywords"),
             "description": _prop(e, "description"),
+            "subject": _prop(e, "subject"),  # spec 007: entity the fact is about (head or tail)
             "source_ids": _split(_prop(e, "source_id")),
             "file_paths": _split(_prop(e, "file_path")),
         }

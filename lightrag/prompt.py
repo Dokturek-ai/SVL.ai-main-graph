@@ -50,18 +50,19 @@ You are a Knowledge Graph Specialist responsible for extracting entities and rel
     - `target_entity`: The name of the target entity. Ensure **consistent naming** with entity extraction. Capitalize the first letter of each significant word (title case) if the name is case-insensitive.
     - `relationship_keywords`: One or more high-level keywords summarizing the relationship. Multiple keywords within this field must be separated by a comma `,`. **DO NOT use `{tuple_delimiter}` for separating multiple keywords within this field.**
     - `relationship_description`: A concise explanation of the nature of the relationship between the source and target entities.
+    - `relationship_subject`: The entity name — which **MUST be exactly the `source_entity` or the `target_entity`** (copied verbatim) — that the relationship is ABOUT (its subject). For a cause/effect statement this is the condition of record: in "X is caused by Y" the subject is X; in "X leads to Y" the subject is X. When genuinely unclear, use the `source_entity`.
 
 3. **Record Types:**
   - `entity` is used only for entity rows and those rows always contain exactly 4 tuple parts total.
-  - `relation` is used only for relationship rows and those rows always contain exactly 5 tuple parts total.
+  - `relation` is used only for relationship rows and those rows always contain exactly 6 tuple parts total.
   - A row with two entity names plus relationship keywords and a relationship description must start with `relation`, never `entity`.
   - After the last entity row, switch prefixes to `relation` for every relationship row.
 
 4. **Output Format:**
   - Entity row: `entity{tuple_delimiter}entity_name{tuple_delimiter}entity_type{tuple_delimiter}entity_description`
-  - Relation row: `relation{tuple_delimiter}source_entity{tuple_delimiter}target_entity{tuple_delimiter}relationship_keywords{tuple_delimiter}relationship_description`
-  - Wrong: `entity{tuple_delimiter}Alice{tuple_delimiter}Acme{tuple_delimiter}founded{tuple_delimiter}Alice founded Acme`
-  - Correct: `relation{tuple_delimiter}Alice{tuple_delimiter}Acme{tuple_delimiter}founded{tuple_delimiter}Alice founded Acme`
+  - Relation row: `relation{tuple_delimiter}source_entity{tuple_delimiter}target_entity{tuple_delimiter}relationship_keywords{tuple_delimiter}relationship_description{tuple_delimiter}relationship_subject`
+  - Wrong: `entity{tuple_delimiter}Alice{tuple_delimiter}Acme{tuple_delimiter}founded{tuple_delimiter}Alice founded Acme{tuple_delimiter}Alice`
+  - Correct: `relation{tuple_delimiter}Alice{tuple_delimiter}Acme{tuple_delimiter}founded{tuple_delimiter}Alice founded Acme{tuple_delimiter}Alice`
 
 5. **Delimiter Usage:**
   - The `{tuple_delimiter}` is a complete, atomic marker and **must not be filled with content**. It serves strictly as a field separator.
@@ -154,11 +155,11 @@ entity{tuple_delimiter}Jordan{tuple_delimiter}Person{tuple_delimiter}Jordan shar
 entity{tuple_delimiter}Cruz{tuple_delimiter}Person{tuple_delimiter}Cruz is associated with a vision of control and order, influencing the dynamics among other characters.
 entity{tuple_delimiter}The Device{tuple_delimiter}Artifact{tuple_delimiter}The Device is central to the story, with potential game-changing implications, and is revered by Taylor.
 entity{tuple_delimiter}Discovery{tuple_delimiter}Concept{tuple_delimiter}Discovery represents the shared intellectual pursuit that unites Jordan and Alex in opposition to Cruz's controlling worldview.
-relation{tuple_delimiter}Alex{tuple_delimiter}Taylor{tuple_delimiter}power dynamics, observation{tuple_delimiter}Alex observes Taylor's authoritarian behavior and notes changes in Taylor's attitude toward the device.
-relation{tuple_delimiter}Alex{tuple_delimiter}Jordan{tuple_delimiter}shared goals, rebellion{tuple_delimiter}Alex and Jordan share a commitment to discovery, which contrasts with Cruz's vision.)
-relation{tuple_delimiter}Taylor{tuple_delimiter}Jordan{tuple_delimiter}conflict resolution, mutual respect{tuple_delimiter}Taylor and Jordan interact directly regarding the device, leading to a moment of mutual respect and an uneasy truce.
-relation{tuple_delimiter}Jordan{tuple_delimiter}Cruz{tuple_delimiter}ideological conflict, rebellion{tuple_delimiter}Jordan's commitment to discovery is in rebellion against Cruz's vision of control and order.
-relation{tuple_delimiter}Taylor{tuple_delimiter}The Device{tuple_delimiter}reverence, technological significance{tuple_delimiter}Taylor shows reverence towards the device, indicating its importance and potential impact.
+relation{tuple_delimiter}Alex{tuple_delimiter}Taylor{tuple_delimiter}power dynamics, observation{tuple_delimiter}Alex observes Taylor's authoritarian behavior and notes changes in Taylor's attitude toward the device.{tuple_delimiter}Alex
+relation{tuple_delimiter}Alex{tuple_delimiter}Jordan{tuple_delimiter}shared goals, rebellion{tuple_delimiter}Alex and Jordan share a commitment to discovery, which contrasts with Cruz's vision.{tuple_delimiter}Alex
+relation{tuple_delimiter}Taylor{tuple_delimiter}Jordan{tuple_delimiter}conflict resolution, mutual respect{tuple_delimiter}Taylor and Jordan interact directly regarding the device, leading to a moment of mutual respect and an uneasy truce.{tuple_delimiter}Taylor
+relation{tuple_delimiter}Jordan{tuple_delimiter}Cruz{tuple_delimiter}ideological conflict, rebellion{tuple_delimiter}Jordan's commitment to discovery is in rebellion against Cruz's vision of control and order.{tuple_delimiter}Jordan
+relation{tuple_delimiter}Taylor{tuple_delimiter}The Device{tuple_delimiter}reverence, technological significance{tuple_delimiter}Taylor shows reverence towards the device, indicating its importance and potential impact.{tuple_delimiter}Taylor
 {completion_delimiter}
 
 """,
@@ -186,11 +187,11 @@ entity{tuple_delimiter}Transect Sampling{tuple_delimiter}Method{tuple_delimiter}
 entity{tuple_delimiter}Global Wildlife Conservation Institute{tuple_delimiter}Organization{tuple_delimiter}The Global Wildlife Conservation Institute funded the expedition led by Dr. Vasquez.
 entity{tuple_delimiter}Primate Decline in Insular Southeast Asia{tuple_delimiter}Content{tuple_delimiter}A landmark research report produced by Vasquez's expedition documenting primate population decline in the region.
 entity{tuple_delimiter}Peat Soil{tuple_delimiter}NaturalObject{tuple_delimiter}Peat soil is a natural substrate in the Borneo rainforest that has been destroyed by palm oil plantation expansion.
-relation{tuple_delimiter}Dr. Elena Vasquez{tuple_delimiter}Bornean Orangutan{tuple_delimiter}field research, population survey{tuple_delimiter}Dr. Vasquez led the expedition that documented the population decline of the Bornean orangutan.
-relation{tuple_delimiter}Dr. Elena Vasquez{tuple_delimiter}Transect Sampling{tuple_delimiter}methodology, research application{tuple_delimiter}Dr. Vasquez's team used transect sampling to estimate the orangutan population.
-relation{tuple_delimiter}Global Wildlife Conservation Institute{tuple_delimiter}Dr. Elena Vasquez{tuple_delimiter}funding, research support{tuple_delimiter}The institute funded the expedition led by Dr. Vasquez.
-relation{tuple_delimiter}Dr. Elena Vasquez{tuple_delimiter}Primate Decline in Insular Southeast Asia{tuple_delimiter}authorship, research output{tuple_delimiter}Dr. Vasquez's expedition produced the landmark report on primate decline.
-relation{tuple_delimiter}Peat Soil{tuple_delimiter}Borneo Rainforest{tuple_delimiter}habitat composition, ecological destruction{tuple_delimiter}Peat soil destruction in the Borneo rainforest was caused by palm oil plantation expansion and is a primary driver of orangutan decline.
+relation{tuple_delimiter}Dr. Elena Vasquez{tuple_delimiter}Bornean Orangutan{tuple_delimiter}field research, population survey{tuple_delimiter}Dr. Vasquez led the expedition that documented the population decline of the Bornean orangutan.{tuple_delimiter}Dr. Elena Vasquez
+relation{tuple_delimiter}Dr. Elena Vasquez{tuple_delimiter}Transect Sampling{tuple_delimiter}methodology, research application{tuple_delimiter}Dr. Vasquez's team used transect sampling to estimate the orangutan population.{tuple_delimiter}Dr. Elena Vasquez
+relation{tuple_delimiter}Global Wildlife Conservation Institute{tuple_delimiter}Dr. Elena Vasquez{tuple_delimiter}funding, research support{tuple_delimiter}The institute funded the expedition led by Dr. Vasquez.{tuple_delimiter}Global Wildlife Conservation Institute
+relation{tuple_delimiter}Dr. Elena Vasquez{tuple_delimiter}Primate Decline in Insular Southeast Asia{tuple_delimiter}authorship, research output{tuple_delimiter}Dr. Vasquez's expedition produced the landmark report on primate decline.{tuple_delimiter}Dr. Elena Vasquez
+relation{tuple_delimiter}Peat Soil{tuple_delimiter}Borneo Rainforest{tuple_delimiter}habitat composition, ecological destruction{tuple_delimiter}Peat soil destruction in the Borneo rainforest was caused by palm oil plantation expansion and is a primary driver of orangutan decline.{tuple_delimiter}Peat Soil
 {completion_delimiter}
 
 """,
@@ -220,11 +221,11 @@ entity{tuple_delimiter}Evolutionary Search{tuple_delimiter}Method{tuple_delimite
 entity{tuple_delimiter}Gradient-Based Search{tuple_delimiter}Method{tuple_delimiter}Gradient-based search is a class of neural architecture search algorithms that was benchmarked against evolutionary search in NASBench-360.
 entity{tuple_delimiter}GPU-Hours{tuple_delimiter}Data{tuple_delimiter}GPU-hours is a metric used in NASBench-360 to measure the computational cost of neural architecture search algorithms.
 entity{tuple_delimiter}Neural Architecture Search{tuple_delimiter}Concept{tuple_delimiter}Neural architecture search is the automated process of designing optimal neural network architectures, the central topic of the publication.
-relation{tuple_delimiter}Dr. Priya Nair{tuple_delimiter}Advances in Neural Architecture Search{tuple_delimiter}authorship{tuple_delimiter}Dr. Priya Nair co-authored the publication.
-relation{tuple_delimiter}Dr. Luca Ferretti{tuple_delimiter}Advances in Neural Architecture Search{tuple_delimiter}authorship{tuple_delimiter}Dr. Luca Ferretti co-authored the publication.
-relation{tuple_delimiter}Advances in Neural Architecture Search{tuple_delimiter}NASBench-360{tuple_delimiter}introduces, benchmarking{tuple_delimiter}The publication introduced the NASBench-360 framework.
-relation{tuple_delimiter}Evolutionary Search{tuple_delimiter}Gradient-Based Search{tuple_delimiter}performance comparison{tuple_delimiter}Evolutionary search outperformed gradient-based methods by 12% on accuracy and used 30% fewer GPU-hours on vision tasks.
-relation{tuple_delimiter}NASBench-360{tuple_delimiter}GPU-Hours{tuple_delimiter}evaluation metric{tuple_delimiter}NASBench-360 uses GPU-hours as one of three key metrics to measure computational cost.
+relation{tuple_delimiter}Dr. Priya Nair{tuple_delimiter}Advances in Neural Architecture Search{tuple_delimiter}authorship{tuple_delimiter}Dr. Priya Nair co-authored the publication.{tuple_delimiter}Dr. Priya Nair
+relation{tuple_delimiter}Dr. Luca Ferretti{tuple_delimiter}Advances in Neural Architecture Search{tuple_delimiter}authorship{tuple_delimiter}Dr. Luca Ferretti co-authored the publication.{tuple_delimiter}Dr. Luca Ferretti
+relation{tuple_delimiter}Advances in Neural Architecture Search{tuple_delimiter}NASBench-360{tuple_delimiter}introduces, benchmarking{tuple_delimiter}The publication introduced the NASBench-360 framework.{tuple_delimiter}Advances in Neural Architecture Search
+relation{tuple_delimiter}Evolutionary Search{tuple_delimiter}Gradient-Based Search{tuple_delimiter}performance comparison{tuple_delimiter}Evolutionary search outperformed gradient-based methods by 12% on accuracy and used 30% fewer GPU-hours on vision tasks.{tuple_delimiter}Evolutionary Search
+relation{tuple_delimiter}NASBench-360{tuple_delimiter}GPU-Hours{tuple_delimiter}evaluation metric{tuple_delimiter}NASBench-360 uses GPU-hours as one of three key metrics to measure computational cost.{tuple_delimiter}NASBench-360
 {completion_delimiter}
 
 """,
@@ -255,6 +256,7 @@ You are a Knowledge Graph Specialist responsible for extracting entities and rel
     - `target`: The name of the target entity. Ensure **consistent naming** with entity extraction. Capitalize the first letter of each significant word (title case) if the name is case-insensitive.
     - `keywords`: One or more high-level keywords summarizing the overarching nature, concepts, or themes of the relationship, separated by commas.
     - `description`: A concise explanation of the nature of the relationship between the source and target entities, providing a clear rationale for their connection.
+    - `subject`: The entity name — which **MUST be exactly the `source` or the `target`** (copied verbatim) — that the relationship is ABOUT. For a cause/effect statement this is the condition of record: in "X is caused by Y" the subject is X; in "X leads to Y" the subject is X. When genuinely unclear, use the `source`.
 
 3. **Relationship Direction & Duplication:**
   - Treat all relationships as **undirected** unless explicitly stated otherwise. Swapping the source and target entities for an undirected relationship does not constitute a new relationship.
@@ -349,11 +351,11 @@ It was a small transformation, barely perceptible, but one that Alex noted with 
     {"name": "Discovery", "type": "Concept", "description": "Discovery represents the shared intellectual pursuit that unites Jordan and Alex in opposition to Cruz's controlling worldview."}
   ],
   "relationships": [
-    {"source": "Alex", "target": "Taylor", "keywords": "power dynamics, observation", "description": "Alex observes Taylor's authoritarian behavior and notes changes in Taylor's attitude toward the device."},
-    {"source": "Alex", "target": "Jordan", "keywords": "shared goals, rebellion", "description": "Alex and Jordan share a commitment to discovery, which contrasts with Cruz's vision."},
-    {"source": "Taylor", "target": "Jordan", "keywords": "conflict resolution, mutual respect", "description": "Taylor and Jordan interact directly regarding the device, leading to a moment of mutual respect and an uneasy truce."},
-    {"source": "Jordan", "target": "Cruz", "keywords": "ideological conflict, rebellion", "description": "Jordan's commitment to discovery is in rebellion against Cruz's vision of control and order."},
-    {"source": "Taylor", "target": "The Device", "keywords": "reverence, technological significance", "description": "Taylor shows reverence towards the device, indicating its importance and potential impact."}
+    {"source": "Alex", "target": "Taylor", "keywords": "power dynamics, observation", "description": "Alex observes Taylor's authoritarian behavior and notes changes in Taylor's attitude toward the device.", "subject": "Alex"},
+    {"source": "Alex", "target": "Jordan", "keywords": "shared goals, rebellion", "description": "Alex and Jordan share a commitment to discovery, which contrasts with Cruz's vision.", "subject": "Alex"},
+    {"source": "Taylor", "target": "Jordan", "keywords": "conflict resolution, mutual respect", "description": "Taylor and Jordan interact directly regarding the device, leading to a moment of mutual respect and an uneasy truce.", "subject": "Taylor"},
+    {"source": "Jordan", "target": "Cruz", "keywords": "ideological conflict, rebellion", "description": "Jordan's commitment to discovery is in rebellion against Cruz's vision of control and order.", "subject": "Jordan"},
+    {"source": "Taylor", "target": "The Device", "keywords": "reverence, technological significance", "description": "Taylor shows reverence towards the device, indicating its importance and potential impact.", "subject": "Taylor"}
   ]
 }
 
@@ -386,11 +388,11 @@ The expedition was funded by the Global Wildlife Conservation Institute and prod
     {"name": "Peat Soil", "type": "NaturalObject", "description": "Peat soil is a natural substrate in the Borneo rainforest that has been destroyed by palm oil plantation expansion."}
   ],
   "relationships": [
-    {"source": "Dr. Elena Vasquez", "target": "Bornean Orangutan", "keywords": "field research, population survey", "description": "Dr. Vasquez led the expedition that documented the population decline of the Bornean orangutan."},
-    {"source": "Dr. Elena Vasquez", "target": "Transect Sampling", "keywords": "methodology, research application", "description": "Dr. Vasquez's team used transect sampling to estimate the orangutan population."},
-    {"source": "Global Wildlife Conservation Institute", "target": "Dr. Elena Vasquez", "keywords": "funding, research support", "description": "The institute funded the expedition led by Dr. Vasquez."},
-    {"source": "Dr. Elena Vasquez", "target": "Primate Decline in Insular Southeast Asia", "keywords": "authorship, research output", "description": "Dr. Vasquez's expedition produced the landmark report on primate decline."},
-    {"source": "Peat Soil", "target": "Borneo Rainforest", "keywords": "habitat composition, ecological destruction", "description": "Peat soil destruction in the Borneo rainforest was caused by palm oil plantation expansion and is a primary driver of orangutan decline."}
+    {"source": "Dr. Elena Vasquez", "target": "Bornean Orangutan", "keywords": "field research, population survey", "description": "Dr. Vasquez led the expedition that documented the population decline of the Bornean orangutan.", "subject": "Dr. Elena Vasquez"},
+    {"source": "Dr. Elena Vasquez", "target": "Transect Sampling", "keywords": "methodology, research application", "description": "Dr. Vasquez's team used transect sampling to estimate the orangutan population.", "subject": "Dr. Elena Vasquez"},
+    {"source": "Global Wildlife Conservation Institute", "target": "Dr. Elena Vasquez", "keywords": "funding, research support", "description": "The institute funded the expedition led by Dr. Vasquez.", "subject": "Global Wildlife Conservation Institute"},
+    {"source": "Dr. Elena Vasquez", "target": "Primate Decline in Insular Southeast Asia", "keywords": "authorship, research output", "description": "Dr. Vasquez's expedition produced the landmark report on primate decline.", "subject": "Dr. Elena Vasquez"},
+    {"source": "Peat Soil", "target": "Borneo Rainforest", "keywords": "habitat composition, ecological destruction", "description": "Peat soil destruction in the Borneo rainforest was caused by palm oil plantation expansion and is a primary driver of orangutan decline.", "subject": "Peat Soil"}
   ]
 }
 
@@ -425,11 +427,11 @@ NASBench-360 measures three key metrics: search efficiency (time-to-solution), m
     {"name": "Neural Architecture Search", "type": "Concept", "description": "Neural architecture search is the automated process of designing optimal neural network architectures, the central topic of the publication."}
   ],
   "relationships": [
-    {"source": "Dr. Priya Nair", "target": "Advances in Neural Architecture Search", "keywords": "authorship", "description": "Dr. Priya Nair co-authored the publication."},
-    {"source": "Dr. Luca Ferretti", "target": "Advances in Neural Architecture Search", "keywords": "authorship", "description": "Dr. Luca Ferretti co-authored the publication."},
-    {"source": "Advances in Neural Architecture Search", "target": "NASBench-360", "keywords": "introduces, benchmarking", "description": "The publication introduced the NASBench-360 framework."},
-    {"source": "Evolutionary Search", "target": "Gradient-Based Search", "keywords": "performance comparison", "description": "Evolutionary search outperformed gradient-based methods by 12% on accuracy and used 30% fewer GPU-hours on vision tasks."},
-    {"source": "NASBench-360", "target": "GPU-Hours", "keywords": "evaluation metric", "description": "NASBench-360 uses GPU-hours as one of three key metrics to measure computational cost."}
+    {"source": "Dr. Priya Nair", "target": "Advances in Neural Architecture Search", "keywords": "authorship", "description": "Dr. Priya Nair co-authored the publication.", "subject": "Dr. Priya Nair"},
+    {"source": "Dr. Luca Ferretti", "target": "Advances in Neural Architecture Search", "keywords": "authorship", "description": "Dr. Luca Ferretti co-authored the publication.", "subject": "Dr. Luca Ferretti"},
+    {"source": "Advances in Neural Architecture Search", "target": "NASBench-360", "keywords": "introduces, benchmarking", "description": "The publication introduced the NASBench-360 framework.", "subject": "Advances in Neural Architecture Search"},
+    {"source": "Evolutionary Search", "target": "Gradient-Based Search", "keywords": "performance comparison", "description": "Evolutionary search outperformed gradient-based methods by 12% on accuracy and used 30% fewer GPU-hours on vision tasks.", "subject": "Evolutionary Search"},
+    {"source": "NASBench-360", "target": "GPU-Hours", "keywords": "evaluation metric", "description": "NASBench-360 uses GPU-hours as one of three key metrics to measure computational cost.", "subject": "NASBench-360"}
   ]
 }
 

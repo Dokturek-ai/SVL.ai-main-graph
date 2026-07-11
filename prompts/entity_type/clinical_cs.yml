@@ -45,10 +45,10 @@ entity_extraction_examples:
     entity{tuple_delimiter}ACE Inhibitory{tuple_delimiter}Medication{tuple_delimiter}Léková skupina představující lék první volby v léčbě arteriální hypertenze.
     entity{tuple_delimiter}Ramipril{tuple_delimiter}Drug{tuple_delimiter}Konkrétní účinná látka ze skupiny ACE inhibitorů uváděná jako příklad léčby.
     entity{tuple_delimiter}ABPM{tuple_delimiter}Procedure{tuple_delimiter}24hodinové ambulantní monitorování krevního tlaku sloužící k potvrzení diagnózy hypertenze.
-    relation{tuple_delimiter}Arteriální Hypertenze{tuple_delimiter}ACE Inhibitory{tuple_delimiter}léčba, první volba{tuple_delimiter}ACE inhibitory jsou lékem první volby v léčbě arteriální hypertenze.
-    relation{tuple_delimiter}ACE Inhibitory{tuple_delimiter}Ramipril{tuple_delimiter}příklad, účinná látka{tuple_delimiter}Ramipril je konkrétní účinná látka ze skupiny ACE inhibitorů.
-    relation{tuple_delimiter}Arteriální Hypertenze{tuple_delimiter}ABPM{tuple_delimiter}diagnostika, potvrzení{tuple_delimiter}ABPM slouží k potvrzení diagnózy arteriální hypertenze.
-    relation{tuple_delimiter}Arteriální Hypertenze{tuple_delimiter}Krevní Tlak{tuple_delimiter}definice, monitorování{tuple_delimiter}Arteriální hypertenze je definována a monitorována hodnotou krevního tlaku.
+    relation{tuple_delimiter}Arteriální Hypertenze{tuple_delimiter}ACE Inhibitory{tuple_delimiter}léčba, první volba{tuple_delimiter}ACE inhibitory jsou lékem první volby v léčbě arteriální hypertenze.{tuple_delimiter}Arteriální Hypertenze
+    relation{tuple_delimiter}ACE Inhibitory{tuple_delimiter}Ramipril{tuple_delimiter}příklad, účinná látka{tuple_delimiter}Ramipril je konkrétní účinná látka ze skupiny ACE inhibitorů.{tuple_delimiter}Ramipril
+    relation{tuple_delimiter}Arteriální Hypertenze{tuple_delimiter}ABPM{tuple_delimiter}diagnostika, potvrzení{tuple_delimiter}ABPM slouží k potvrzení diagnózy arteriální hypertenze.{tuple_delimiter}Arteriální Hypertenze
+    relation{tuple_delimiter}Arteriální Hypertenze{tuple_delimiter}Krevní Tlak{tuple_delimiter}definice, monitorování{tuple_delimiter}Arteriální hypertenze je definována a monitorována hodnotou krevního tlaku.{tuple_delimiter}Arteriální Hypertenze
     {completion_delimiter}
   - |
     ---Entity Types---
@@ -69,10 +69,10 @@ entity_extraction_examples:
     entity{tuple_delimiter}Metformin{tuple_delimiter}Drug{tuple_delimiter}Konkrétní léčivo uváděné jako lék první volby u diabetu 2. typu.
     entity{tuple_delimiter}Polyurie{tuple_delimiter}Symptom{tuple_delimiter}Typický příznak diabetu 2. typu — zvýšené močení.
     entity{tuple_delimiter}Polydipsie{tuple_delimiter}Symptom{tuple_delimiter}Typický příznak diabetu 2. typu — zvýšená žízeň.
-    relation{tuple_delimiter}Diabetes Mellitus 2. Typu{tuple_delimiter}HbA1c{tuple_delimiter}diagnostika, kritérium{tuple_delimiter}HbA1c ≥ 48 mmol/mol je diagnostickým kritériem diabetu 2. typu.
-    relation{tuple_delimiter}Diabetes Mellitus 2. Typu{tuple_delimiter}Metformin{tuple_delimiter}léčba, první volba{tuple_delimiter}Metformin je lékem první volby u diabetu 2. typu.
-    relation{tuple_delimiter}Diabetes Mellitus 2. Typu{tuple_delimiter}Polyurie{tuple_delimiter}příznak{tuple_delimiter}Polyurie je typickým příznakem diabetu 2. typu.
-    relation{tuple_delimiter}Diabetes Mellitus 2. Typu{tuple_delimiter}Polydipsie{tuple_delimiter}příznak{tuple_delimiter}Polydipsie je typickým příznakem diabetu 2. typu.
+    relation{tuple_delimiter}Diabetes Mellitus 2. Typu{tuple_delimiter}HbA1c{tuple_delimiter}diagnostika, kritérium{tuple_delimiter}HbA1c ≥ 48 mmol/mol je diagnostickým kritériem diabetu 2. typu.{tuple_delimiter}Diabetes Mellitus 2. Typu
+    relation{tuple_delimiter}Diabetes Mellitus 2. Typu{tuple_delimiter}Metformin{tuple_delimiter}léčba, první volba{tuple_delimiter}Metformin je lékem první volby u diabetu 2. typu.{tuple_delimiter}Diabetes Mellitus 2. Typu
+    relation{tuple_delimiter}Diabetes Mellitus 2. Typu{tuple_delimiter}Polyurie{tuple_delimiter}příznak{tuple_delimiter}Polyurie je typickým příznakem diabetu 2. typu.{tuple_delimiter}Diabetes Mellitus 2. Typu
+    relation{tuple_delimiter}Diabetes Mellitus 2. Typu{tuple_delimiter}Polydipsie{tuple_delimiter}příznak{tuple_delimiter}Polydipsie je typickým příznakem diabetu 2. typu.{tuple_delimiter}Diabetes Mellitus 2. Typu
     {completion_delimiter}
 
 entity_extraction_json_examples:
@@ -99,10 +99,10 @@ entity_extraction_json_examples:
         {"name": "ABPM", "type": "Procedure", "description": "24hodinové ambulantní monitorování krevního tlaku sloužící k potvrzení diagnózy hypertenze."}
       ],
       "relationships": [
-        {"source": "Arteriální Hypertenze", "target": "ACE Inhibitory", "keywords": "léčba, první volba", "description": "ACE inhibitory jsou lékem první volby v léčbě arteriální hypertenze."},
-        {"source": "ACE Inhibitory", "target": "Ramipril", "keywords": "příklad, účinná látka", "description": "Ramipril je konkrétní účinná látka ze skupiny ACE inhibitorů."},
-        {"source": "Arteriální Hypertenze", "target": "ABPM", "keywords": "diagnostika, potvrzení", "description": "ABPM slouží k potvrzení diagnózy arteriální hypertenze."},
-        {"source": "Arteriální Hypertenze", "target": "Krevní Tlak", "keywords": "definice, monitorování", "description": "Arteriální hypertenze je definována a monitorována hodnotou krevního tlaku."}
+        {"source": "Arteriální Hypertenze", "target": "ACE Inhibitory", "keywords": "léčba, první volba", "description": "ACE inhibitory jsou lékem první volby v léčbě arteriální hypertenze.", "subject": "Arteriální Hypertenze"},
+        {"source": "ACE Inhibitory", "target": "Ramipril", "keywords": "příklad, účinná látka", "description": "Ramipril je konkrétní účinná látka ze skupiny ACE inhibitorů.", "subject": "Ramipril"},
+        {"source": "Arteriální Hypertenze", "target": "ABPM", "keywords": "diagnostika, potvrzení", "description": "ABPM slouží k potvrzení diagnózy arteriální hypertenze.", "subject": "Arteriální Hypertenze"},
+        {"source": "Arteriální Hypertenze", "target": "Krevní Tlak", "keywords": "definice, monitorování", "description": "Arteriální hypertenze je definována a monitorována hodnotou krevního tlaku.", "subject": "Arteriální Hypertenze"}
       ]
     }
   - |
@@ -128,9 +128,9 @@ entity_extraction_json_examples:
         {"name": "Polydipsie", "type": "Symptom", "description": "Typický příznak diabetu 2. typu — zvýšená žízeň."}
       ],
       "relationships": [
-        {"source": "Diabetes Mellitus 2. Typu", "target": "HbA1c", "keywords": "diagnostika, kritérium", "description": "HbA1c ≥ 48 mmol/mol je diagnostickým kritériem diabetu 2. typu."},
-        {"source": "Diabetes Mellitus 2. Typu", "target": "Metformin", "keywords": "léčba, první volba", "description": "Metformin je lékem první volby u diabetu 2. typu."},
-        {"source": "Diabetes Mellitus 2. Typu", "target": "Polyurie", "keywords": "příznak", "description": "Polyurie je typickým příznakem diabetu 2. typu."},
-        {"source": "Diabetes Mellitus 2. Typu", "target": "Polydipsie", "keywords": "příznak", "description": "Polydipsie je typickým příznakem diabetu 2. typu."}
+        {"source": "Diabetes Mellitus 2. Typu", "target": "HbA1c", "keywords": "diagnostika, kritérium", "description": "HbA1c ≥ 48 mmol/mol je diagnostickým kritériem diabetu 2. typu.", "subject": "Diabetes Mellitus 2. Typu"},
+        {"source": "Diabetes Mellitus 2. Typu", "target": "Metformin", "keywords": "léčba, první volba", "description": "Metformin je lékem první volby u diabetu 2. typu.", "subject": "Diabetes Mellitus 2. Typu"},
+        {"source": "Diabetes Mellitus 2. Typu", "target": "Polyurie", "keywords": "příznak", "description": "Polyurie je typickým příznakem diabetu 2. typu.", "subject": "Diabetes Mellitus 2. Typu"},
+        {"source": "Diabetes Mellitus 2. Typu", "target": "Polydipsie", "keywords": "příznak", "description": "Polydipsie je typickým příznakem diabetu 2. typu.", "subject": "Diabetes Mellitus 2. Typu"}
       ]
     }
