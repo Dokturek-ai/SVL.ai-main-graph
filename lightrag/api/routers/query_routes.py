@@ -146,6 +146,29 @@ class QueryRequest(BaseModel):
         return param
 
 
+class PassageLink(BaseModel):
+    """Section-crop provenance for one cited chunk (spec 004) — the PDF location a passage came from.
+
+    Mirrors the ``:retrieve`` ``RetrievedPassage`` provenance so the chat FE can render the highlighted
+    page region per span. All fields except ``text`` are optional; a chunk whose sidecar can't resolve
+    degrades to text only.
+    """
+
+    text: str = Field(description="The cited chunk text")
+    page: Optional[str] = Field(default=None, description="1-based page number of the primary block")
+    pages: Optional[List[str]] = Field(
+        default=None, description="Every page the passage's blocks touch (can span a page break)"
+    )
+    section: Optional[str] = Field(default=None, description="Heading path 'parent › … › heading'")
+    bbox: Optional[List[float]] = Field(
+        default=None, description="[x0,y0,x1,y1] of the primary block (display-only)"
+    )
+    crop_url: Optional[str] = Field(
+        default=None, description="Highlighted page-region PNG endpoint (null when no page resolved)"
+    )
+    pdf_url: Optional[str] = Field(default=None, description="Full source PDF endpoint")
+
+
 class ReferenceItem(BaseModel):
     """A single reference item in query responses."""
 
@@ -154,6 +177,14 @@ class ReferenceItem(BaseModel):
     content: Optional[List[str]] = Field(
         default=None,
         description="List of chunk contents from this file (only present when include_chunk_content=True)",
+    )
+    chunks: Optional[List[PassageLink]] = Field(
+        default=None,
+        description=(
+            "Per-chunk section-crop provenance (text + page/section/crop_url/pdf_url), present when "
+            "include_chunk_content=True. Additive — `content` stays for back-compat; a file cited from "
+            "several spans yields several chunks."
+        ),
     )
 
 
@@ -191,6 +222,49 @@ class StreamChunkResponse(BaseModel):
     error: Optional[str] = Field(
         default=None, description="Error message if processing fails"
     )
+
+
+async def _enrich_references_with_chunks(rag, references, chunks):
+    """Group chunk ``content`` per file (back-compat) and attach per-chunk section-crop provenance.
+
+    Adds ``chunks: [{text, page, pages, section, bbox, crop_url, pdf_url}]`` to each reference so the chat
+    FE (``/demo/guidelines`` → ``SourceDialog``) can render the highlighted PDF page-region per cited span
+    — the same provenance the ``/v1/guidelines:retrieve`` path serves (shared resolver in
+    ``lightrag.sidecar.passage_links``, so the two can't drift). ``content`` (List[str]) is preserved
+    unchanged. Best-effort: a chunk whose sidecar/blocks don't resolve keeps text only (page/crop_url null).
+    """
+    from lightrag.sidecar.passage_links import build_passage_links, passage_provenance
+
+    ref_id_to_content: Dict[str, List[str]] = {}
+    ref_id_to_chunks: Dict[str, List[dict]] = {}
+    blocks_cache: dict = {}  # per-request: a doc's blocks.jsonl loads once across its chunks
+    for chunk in chunks:
+        ref_id = chunk.get("reference_id", "")
+        content = chunk.get("content", "")
+        if not (ref_id and content):
+            continue
+        # Collect chunk content; join later to avoid quadratic string concatenation
+        ref_id_to_content.setdefault(ref_id, []).append(content)
+        file_path = chunk.get("file_path", "")
+        chunk_id = chunk.get("chunk_id") or chunk.get("id") or ""
+        # Guard the empty id: a blank chunk_id must not hit the store (an unspecified
+        # get_by_id("") could return a bogus record and mis-attach page/section).
+        prov = (await passage_provenance(rag, chunk_id, file_path, blocks_cache) or {}) if chunk_id else {}
+        ref_id_to_chunks.setdefault(ref_id, []).append(
+            {"text": content, **build_passage_links(chunk_id, file_path, prov)}
+        )
+
+    enriched = []
+    for ref in references:
+        ref_copy = ref.copy()
+        ref_id = ref.get("reference_id", "")
+        if ref_id in ref_id_to_content:
+            # Keep content as a list of chunks (one file may have multiple chunks)
+            ref_copy["content"] = ref_id_to_content[ref_id]
+        if ref_id in ref_id_to_chunks:
+            ref_copy["chunks"] = ref_id_to_chunks[ref_id]
+        enriched.append(ref_copy)
+    return enriched
 
 
 def create_query_routes(rag, api_key: Optional[str] = None, top_k: int = 60):
@@ -430,28 +504,11 @@ def create_query_routes(rag, api_key: Optional[str] = None, top_k: int = 60):
             if not response_content:
                 response_content = "No relevant context found for the query."
 
-            # Enrich references with chunk content if requested
+            # Enrich references with chunk content + per-chunk section-crop provenance if requested
             if request.include_references and request.include_chunk_content:
-                chunks = data.get("chunks", [])
-                # Create a mapping from reference_id to chunk content
-                ref_id_to_content = {}
-                for chunk in chunks:
-                    ref_id = chunk.get("reference_id", "")
-                    content = chunk.get("content", "")
-                    if ref_id and content:
-                        # Collect chunk content; join later to avoid quadratic string concatenation
-                        ref_id_to_content.setdefault(ref_id, []).append(content)
-
-                # Add content to references
-                enriched_references = []
-                for ref in references:
-                    ref_copy = ref.copy()
-                    ref_id = ref.get("reference_id", "")
-                    if ref_id in ref_id_to_content:
-                        # Keep content as a list of chunks (one file may have multiple chunks)
-                        ref_copy["content"] = ref_id_to_content[ref_id]
-                    enriched_references.append(ref_copy)
-                references = enriched_references
+                references = await _enrich_references_with_chunks(
+                    rag, references, data.get("chunks", [])
+                )
 
             # Return response with or without references based on request
             if request.include_references:
@@ -683,29 +740,11 @@ def create_query_routes(rag, api_key: Optional[str] = None, top_k: int = 60):
                 references = result.get("data", {}).get("references", [])
                 llm_response = result.get("llm_response", {})
 
-                # Enrich references with chunk content if requested
+                # Enrich references with chunk content + per-chunk section-crop provenance if requested
                 if request.include_references and request.include_chunk_content:
-                    data = result.get("data", {})
-                    chunks = data.get("chunks", [])
-                    # Create a mapping from reference_id to chunk content
-                    ref_id_to_content = {}
-                    for chunk in chunks:
-                        ref_id = chunk.get("reference_id", "")
-                        content = chunk.get("content", "")
-                        if ref_id and content:
-                            # Collect chunk content
-                            ref_id_to_content.setdefault(ref_id, []).append(content)
-
-                    # Add content to references
-                    enriched_references = []
-                    for ref in references:
-                        ref_copy = ref.copy()
-                        ref_id = ref.get("reference_id", "")
-                        if ref_id in ref_id_to_content:
-                            # Keep content as a list of chunks (one file may have multiple chunks)
-                            ref_copy["content"] = ref_id_to_content[ref_id]
-                        enriched_references.append(ref_copy)
-                    references = enriched_references
+                    references = await _enrich_references_with_chunks(
+                        rag, references, result.get("data", {}).get("chunks", [])
+                    )
 
                 if llm_response.get("is_streaming"):
                     # Streaming mode: send references first, then stream response chunks
