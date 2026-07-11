@@ -193,7 +193,10 @@ def build_verify_prompt(
         f"Přiřazený kód: {ref.get('code', '')} — {ref.get('display', '')}\n\n"
         "Zvaž: Odpovídá kód klinickému významu entity? NENÍ to validní kód ze ŠPATNÉ kategorie "
         "(homonym / jiný koncept, který náhodou existuje)? NENÍ entita léčebná metoda / výkon / "
-        "vyšetření, kterému MKN-10 diagnostický kód nepřísluší?\n\n"
+        "vyšetření, kterému MKN-10 diagnostický kód nepřísluší? NENÍ entita OBECNÁ léková třída / "
+        "farmakologická skupina (např. „ACE inhibitory\", „benzodiazepiny\", „antagonisté kalcia\", "
+        "„agonisté ...\"), zatímco kód míří na JEDEN konkrétní lék/látku? Léková třída se NESMÍ "
+        "kódovat jako konkrétní přípravek — v tom případě DROP.\n\n"
         "Odpověz PŘESNĚ jedním řádkem: `KEEP | důvod`  nebo  `DROP | důvod`."
     )
 
