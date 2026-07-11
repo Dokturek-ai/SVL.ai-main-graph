@@ -26,7 +26,9 @@ from pydantic import BaseModel, Field
 
 from lightrag.base import QueryParam
 from lightrag.api.utils_api import get_combined_auth_dependency
+from lightrag.sidecar.provenance import load_blocks_by_id, resolve_provenance
 from lightrag.utils import logger
+from lightrag.utils_pipeline import parsed_artifact_dir_for
 
 # Where the promotion pass writes the immutable bundle (data volume so it survives a redeploy).
 _BUNDLE_DIR = os.getenv("PROMOTION_BUNDLE_DIR", "/app/data/promotion/bundle")
@@ -73,6 +75,64 @@ class RetrievedPassage(BaseModel):
     score: Optional[float] = None
     facet: Optional[str] = None  # v2
     concept_ref: Optional[ConceptRef] = None  # v2 (per-chunk)
+    # section-crop provenance (spec 004 R2): the source PDF location of this passage.
+    # Resolved live from the current sidecar; `page`/`section` are the stable keys, `bbox` is
+    # display-only. Null when the chunk carries no MinerU sidecar (degrades to today's citation).
+    page: Optional[str] = None
+    pages: Optional[List[str]] = None  # every page the passage's blocks touch (can span a break)
+    section: Optional[str] = None  # heading path "parent › … › heading"
+    bbox: Optional[List[float]] = None  # [x0,y0,x1,y1] of the primary block (display-only)
+    crop_url: Optional[str] = None  # R3 (gated on the PDF upload) — highlighted page-region PNG
+    pdf_url: Optional[str] = None  # R4 (gated) — the full source PDF
+
+
+def _load_blocks_for_doc(file_path: str) -> Optional[dict]:
+    """Locate + load ``<doc>.parsed/*.blocks.jsonl`` for a chunk's ``file_path``; ``None`` if absent.
+
+    I/O helper — kept off :func:`resolve_provenance` (pure). Best-effort: any failure ⇒ ``None`` so the
+    passage degrades to today's citation instead of erroring the retrieve.
+    """
+    try:
+        parsed = parsed_artifact_dir_for(file_path)
+        if not parsed.exists():
+            return None
+        # Prefer the exact ``<stem>.blocks.jsonl`` (the writer's name) so a collision-suffixed sibling
+        # dir can't have us resolve against a different doc's blocks; glob only as a fallback.
+        exact = parsed / f"{Path(file_path).stem}.blocks.jsonl"
+        target = exact if exact.exists() else next(iter(sorted(parsed.glob("*.blocks.jsonl"))), None)
+        return load_blocks_by_id(str(target)) if target else None
+    except Exception as e:
+        logger.debug("section-crop: blocks load failed for %s: %s", file_path, e)
+        return None
+
+
+async def _passage_provenance(rag, chunk_id, file_path, blocks_cache, *, load_blocks=None):
+    """Resolve ``{page, pages, section, bbox}`` for a cited chunk, or ``None``.
+
+    Fetches the chunk's ``sidecar`` from the store (the ``aquery_data`` projection drops it) and joins it
+    against the doc's ``blocks.jsonl`` via the shipped resolver. ``blocks_cache`` is per-request so a doc's
+    blocks load once across its chunks. ``load_blocks`` is injectable for tests; it defaults to the
+    module-level loader looked up at call time (so it stays monkeypatch-able). All-best-effort: error ⇒
+    ``None``."""
+    loader = load_blocks if load_blocks is not None else _load_blocks_for_doc
+    try:
+        rec = await rag.text_chunks.get_by_id(chunk_id)
+    except Exception as e:
+        logger.debug("section-crop: text_chunks.get_by_id(%s) failed: %s", chunk_id, e)
+        return None
+    sidecar = (rec or {}).get("sidecar")
+    if not sidecar:
+        return None
+    if file_path not in blocks_cache:
+        blocks_cache[file_path] = loader(file_path)
+    blocks = blocks_cache[file_path]
+    if not blocks:
+        return None
+    try:
+        return resolve_provenance(sidecar, blocks)
+    except Exception as e:
+        logger.debug("section-crop: resolve_provenance failed for %s: %s", chunk_id, e)
+        return None
 
 
 class GuidelineRetrieveResponse(BaseModel):
@@ -107,6 +167,7 @@ def create_guidelines_routes(rag, api_key: Optional[str] = None):
             chunks = (result or {}).get("data", {}).get("chunks", []) or []
 
             passages: List[RetrievedPassage] = []
+            blocks_cache: dict = {}  # per-request: a doc's blocks.jsonl loads once across its chunks
             for chunk in chunks[: request.top_k]:
                 content = chunk.get("content")
                 if not content:
@@ -114,11 +175,16 @@ def create_guidelines_routes(rag, api_key: Optional[str] = None):
                 file_path = chunk.get("file_path", "unknown_source")
                 chunk_id = chunk.get("chunk_id", "")
                 edition = _edition_from_filename(file_path)
+                prov = await _passage_provenance(rag, chunk_id, file_path, blocks_cache) or {}
                 passages.append(
                     RetrievedPassage(
                         text=content,
                         citation=f"{file_path}#chunk={chunk_id}@{edition}",
                         score=chunk.get("score"),
+                        page=prov.get("page"),
+                        pages=prov.get("pages"),
+                        section=prov.get("section"),
+                        bbox=prov.get("bbox"),
                     )
                 )
 

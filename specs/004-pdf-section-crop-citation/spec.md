@@ -1,6 +1,6 @@
 # Spec 004 — PDF section-crop citation
 
-**Status:** implementing (resolver core; render/serve gated on substrate verify)
+**Status:** R1 (resolver) ✅ + R2 (retrieve provenance fields) ✅ shipped; substrate verified (sidecar+blocks ✅, PDFs ❌); R3/R4 gated on the PDF upload.
 **Source:** brief `docs/briefs/2026-07-10-guidelines-pdf-section-crop-citation.md` (owner-decided 2026-07-10)
 
 ## Problem
