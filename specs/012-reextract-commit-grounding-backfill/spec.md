@@ -32,8 +32,18 @@ path today.
 
 `merge_nodes_and_edges` upserts nodes **by entity name** and edges **by (src, tgt)** — re-running over the
 same chunks re-merges into the SAME graph nodes (updates them, adds `concept_ref`), it does not create
-duplicate nodes. So no delete-first is needed; re-extract overlays grounding onto the existing graph. The
-1-doc test (below) confirms no duplication + that `concept_ref` lands.
+duplicate nodes. `source_ids` are dedup-merged (`merge_source_ids`). So no delete-first is needed; re-extract
+overlays grounding onto the existing graph. The 1-doc test confirms no node duplication + that `concept_ref`
+lands.
+
+**Known caveat — edge weight accumulates on re-merge (BUNDLE-HARMLESS).** `_merge_edges_then_upsert` finalises
+`weight = sum(new_edge_weights + already_weights)` (operate.py ~2512), so re-committing a doc whose edges
+already exist *adds* the re-extracted weight on top of the stored weight (~2× after one backfill, more if a
+doc is committed repeatedly). This is **immaterial to the mkn10 handoff**: the promotion bundle's `edges.jsonl`
+carries `{head, tail, rel_type, keywords, description, subject, source_ids, file_paths}` — **no weight**
+(`harvest.py`), so the drift never reaches mkn10. It only perturbs the internal graph's relevance ranking on
+staging. Acceptable for the backfill; the harness runs each doc **once**. A future fix could clean-slate the
+doc's edge contribution first, but it's not needed for the bundle.
 
 ## Non-goals
 

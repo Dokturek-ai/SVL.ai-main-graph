@@ -1671,7 +1671,9 @@ class LightRAG(_RoleLLMMixin, _StorageMigrationMixin, _PipelineMixin):
                 total_files=1,
                 file_path=file_path,
             )
-            await self._insert_done()
+            # cleanup variant (not plain _insert_done) — clears the flush buffer on IndexFlushError so a
+            # failed flush can't wedge every later insert by replaying poisoned ops (non-pipeline caller).
+            await self._insert_done_with_cleanup()
         finally:
             async with pipeline_status_lock:
                 pipeline_status["busy"] = False

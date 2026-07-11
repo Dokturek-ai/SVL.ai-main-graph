@@ -37,10 +37,10 @@ def _fake_self():
     ns._build_global_config = lambda: {}
     ns._insert_done_calls = []
 
-    async def _insert_done():
+    async def _insert_done_with_cleanup():
         ns._insert_done_calls.append(True)
 
-    ns._insert_done = _insert_done
+    ns._insert_done_with_cleanup = _insert_done_with_cleanup
     return ns
 
 
@@ -51,10 +51,12 @@ def _patch(monkeypatch, *, busy=False, calls=None):
     async def _get_ns(name, workspace=None):
         return status
 
-    # the method does `from lightrag.kg.shared_storage import …` at call time → patch the source module
+    # the method does `from lightrag.kg.shared_storage import …` at call time → patch the source module.
+    # ONE shared lock instance (the two `async with` blocks must contend on the same lock, as in prod).
+    _lock = asyncio.Lock()
     monkeypatch.setattr("lightrag.kg.shared_storage.get_namespace_data", _get_ns, raising=False)
     monkeypatch.setattr("lightrag.kg.shared_storage.get_namespace_lock",
-                        lambda name, workspace=None: asyncio.Lock(), raising=False)
+                        lambda name, workspace=None: _lock, raising=False)
 
     async def _extract(chunks, **kw):
         calls["extract"] = list(chunks.keys())
@@ -100,3 +102,20 @@ async def test_commit_404s_on_missing_doc(monkeypatch):
     me = _fake_self()
     with pytest.raises(ValueError, match="not found"):
         await LightRAG.areextract_document_commit(me, "nope")
+
+
+@pytest.mark.offline
+async def test_commit_releases_busy_and_skips_flush_on_extract_error(monkeypatch):
+    # extract raises → busy MUST be released (finally) and the flush MUST NOT run.
+    calls, status = _patch(monkeypatch)
+
+    async def _boom(chunks, **kw):
+        raise RuntimeError("extract exploded")
+
+    monkeypatch.setattr("lightrag.operate.extract_entities", _boom, raising=False)
+    me = _fake_self()
+    with pytest.raises(RuntimeError, match="exploded"):
+        await LightRAG.areextract_document_commit(me, "d1")
+    assert status["busy"] is False  # lock released despite the error
+    assert me._insert_done_calls == []  # never flushed
+    assert "merge" not in calls  # merge never reached
