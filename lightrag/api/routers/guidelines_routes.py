@@ -309,7 +309,10 @@ def create_guidelines_routes(rag, api_key: Optional[str] = None):
             headers={"Content-Disposition": "attachment; filename=guidelines-bundle.zip"},
         )
 
-    @router.get("/v1/guidelines/section-crop", dependencies=[Depends(combined_auth)])
+    # PUBLIC (no combined_auth): the FE embeds these as a plain <img src>/<a href>, which cannot attach
+    # the X-API-Key header, so an auth-gated endpoint 403s in the browser. The content is public SVL
+    # guideline material (a rendered page crop / the source PDF), path-traversal-safe (basename only).
+    @router.get("/v1/guidelines/section-crop")
     async def guidelines_section_crop(
         chunk_id: str = Query(..., description="Cited chunk id (from the retrieve citation)."),
     ):
@@ -343,7 +346,7 @@ def create_guidelines_routes(rag, api_key: Optional[str] = None):
             raise HTTPException(status_code=500, detail="crop render failed")
         return Response(content=png, media_type="image/png")
 
-    @router.get("/v1/guidelines/pdf", dependencies=[Depends(combined_auth)])
+    @router.get("/v1/guidelines/pdf")  # PUBLIC (see section-crop above): browser <a href> can't send the key
     async def guidelines_pdf(
         doc: str = Query(..., description="Source document file_path / name."),
     ):
