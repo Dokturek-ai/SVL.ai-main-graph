@@ -13,14 +13,17 @@ from lightrag.grounding import (
     _BROWSER_UA,
     append_resolve_cache,
     build_grounding_prompt,
+    build_verify_prompt,
     ground_entity,
     ground_entity_cached,
     is_clinical_type,
     load_resolve_cache,
     neural_search_candidates,
     parse_concept_ref,
+    parse_verdict,
     resolve_cache_key,
     route_domain,
+    verify_concept_ref,
 )
 
 
@@ -327,3 +330,107 @@ async def test_ground_entity_cached_miss_grounds_appends_then_hits(tmp_path):
     second = await ground_entity_cached(entity, "kontext", **args)
     assert second == first
     assert calls == {"api": 1, "llm": 1}  # no new calls on the hit
+
+
+# --- verify-or-abstain (spec 010) ------------------------------------------------------------
+
+
+@pytest.mark.offline
+def test_build_verify_prompt_carries_code_and_asks_keep_drop():
+    prompt = build_verify_prompt(
+        "Spánková deprivace", "procedure", "léčebná metoda",
+        {"code": "T73.9", "display": "Účinky strádání NS"}, "léčba deprese",
+    )
+    assert "T73.9" in prompt and "Účinky strádání NS" in prompt
+    assert "Spánková deprivace" in prompt
+    assert "KEEP" in prompt and "DROP" in prompt
+
+
+@pytest.mark.offline
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("KEEP | kód sedí", True),
+        ("keep", True),
+        ("DROP | špatná kategorie", False),
+        ("Nejasné", False),   # not clearly KEEP → abstain
+        ("", False),
+        (None, False),
+    ],
+)
+def test_parse_verdict(text, expected):
+    assert parse_verdict(text) is expected
+
+
+@pytest.mark.offline
+async def test_verify_concept_ref_keep_and_drop():
+    ref = {"system": MKN10_SYSTEM, "code": "F32.8", "display": "d"}
+
+    async def keeper(prompt):
+        return "KEEP | ok"
+
+    async def dropper(prompt):
+        return "DROP | ne"
+
+    assert await verify_concept_ref({"name": "Deprese", "type": "condition"}, ref, "ctx", verify_llm_func=keeper) is True
+    assert await verify_concept_ref({"name": "Deprese", "type": "condition"}, ref, "ctx", verify_llm_func=dropper) is False
+
+
+@pytest.mark.offline
+async def test_ground_entity_verify_keeps_and_drops_and_swallows_error():
+    async def api(url, headers):
+        return {"results": [{"code": "F32.8", "name_cs": "Jiné dep. fáze", "score_fused": 0.03}]}
+
+    async def pick(prompt):
+        return "F32.8"
+
+    base = dict(llm_func=pick, neural_base="https://mkn10.example", api=api)
+    entity = {"name": "Deprese", "type": "condition", "description": "porucha nálady"}
+
+    # no verifier → back-compat: the picked ref is kept
+    assert await ground_entity(entity, "ctx", **base) == [
+        {"system": MKN10_SYSTEM, "code": "F32.8", "display": "Jiné dep. fáze"}
+    ]
+
+    async def keep(_):
+        return "KEEP | ok"
+
+    async def drop(_):
+        return "DROP | ne"
+
+    async def boom(_):
+        raise RuntimeError("judge down")
+
+    got = await ground_entity(entity, "ctx", **base, verify_llm_func=keep)
+    assert got and got[0]["code"] == "F32.8"                     # KEEP → kept
+    assert await ground_entity(entity, "ctx", **base, verify_llm_func=drop) == []   # DROP → abstain
+    assert await ground_entity(entity, "ctx", **base, verify_llm_func=boom) == []   # error → abstain
+
+
+@pytest.mark.offline
+async def test_ground_entity_cached_caches_verified_result(tmp_path):
+    calls = {"api": 0, "pick": 0, "verify": 0}
+
+    async def api(url, headers):
+        calls["api"] += 1
+        return {"results": [{"code": "F32.8", "name_cs": "d", "score_fused": 0.03}]}
+
+    async def pick(_):
+        calls["pick"] += 1
+        return "F32.8"
+
+    async def drop(_):
+        calls["verify"] += 1
+        return "DROP | ne"
+
+    entity = {"name": "Deprese", "type": "condition", "description": "d"}
+    cache: dict = {}
+    args = dict(cache=cache, cache_path=str(tmp_path / "c.jsonl"),
+                llm_func=pick, neural_base="https://mkn10.example", api=api, verify_llm_func=drop)
+
+    first = await ground_entity_cached(entity, "ctx", **args)
+    assert first == []                                  # dropped by the judge → abstain, cached
+    assert calls == {"api": 1, "pick": 1, "verify": 1}
+    second = await ground_entity_cached(entity, "ctx", **args)
+    assert second == []
+    assert calls == {"api": 1, "pick": 1, "verify": 1}  # cache hit — no new pick/verify
