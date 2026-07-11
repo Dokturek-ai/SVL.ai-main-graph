@@ -1,41 +1,36 @@
-# Plan 011 — implementation
+# Plan 011 — as-built
 
 ## Files
 
-- `lightrag/api/routers/query_routes.py` — the only source change:
-  1. `QueryRequest`: add `include_chunk_provenance: Optional[bool] = Field(default=False, …)`. It is already
-     excluded from `to_query_params` iff we add it to the `exclude={…}` set (alongside `include_chunk_content`).
-  2. New model `ChunkProvenance(BaseModel)`: `chunk_id, reference_id, file_path, text` +
-     `page, pages, section, bbox, crop_url, pdf_url` (all Optional; the last six mirror `RetrievedPassage`).
-  3. `QueryResponse`: add `chunks: Optional[List[ChunkProvenance]] = None`.
-  4. `StreamChunkResponse`: add `chunks: Optional[List[Dict[str, Any]]] = None` (NDJSON first line).
-  5. A module-level async helper `_build_chunk_provenance(rag, chunks)` that iterates the cited chunks,
-     calls `passage_provenance(rag, chunk_id, file_path, blocks_cache)` (shared `blocks_cache` dict per call),
-     and returns `[{chunk_id, reference_id, file_path, text, **build_passage_links(chunk_id, file_path, prov)}]`.
-     Best-effort: a per-chunk resolver failure yields null links (build_passage_links already handles `{}`).
-  6. `/query` handler: after references are assembled, `if request.include_references and
-     request.include_chunk_provenance:` set `chunks = await _build_chunk_provenance(rag, data.get("chunks", []))`
-     and pass to `QueryResponse(chunks=chunks)`.
-  7. `/query/stream` handler: same, injected into the first NDJSON line next to `references`.
+- `lightrag/api/routers/query_routes.py`:
+  - `PassageLink(BaseModel)` — `text` + optional `page/pages/section/bbox/crop_url/pdf_url`.
+  - `ReferenceItem.chunks: Optional[List[PassageLink]] = None` (additive; documents the schema, makes
+    `/query` non-stream serialize it, not only the raw-dict stream path).
+  - `_enrich_references_with_chunks(rag, references, chunks)` — per-file `content` group (back-compat) +
+    per-chunk `chunks` via `passage_provenance` + `build_passage_links`; `blocks_cache` per request;
+    empty-`chunk_id` guard.
+  - Wired into `/query` and `/query/stream`, replacing the two inline content-only enrichment blocks.
+  - Import from the shared lib `lightrag.sidecar.passage_links` (NOT the guidelines router).
 
-- Import: `from lightrag.sidecar.passage_links import passage_provenance, build_passage_links` — a shared lib
-  module (NOT the guidelines router), so query_routes stays free of a router→router dependency.
+- `lightrag/sidecar/passage_links.py` (new, shared) — `passage_provenance` (resolve chunk sidecar → blocks),
+  `build_passage_links` (→ `{page,pages,section,bbox,crop_url,pdf_url}`), `load_blocks_for_doc`, and the
+  `crop_url`/`pdf_url` string shape. Single source of truth for both `:retrieve` and the chat path.
 
-- `tests/api/routes/test_query_*.py` (or a new `test_query_chunk_provenance.py`): unit tests with an injected
-  fake `rag` (chunks + a fake `text_chunks.get_by_id` sidecar) + monkeypatched `load_blocks_for_doc`.
+- `lightrag/api/routers/guidelines_routes.py` — `:retrieve` refactored to reuse `passage_links`
+  (`_load_blocks_for_doc`/`_passage_provenance` aliases retained so the section-crop render endpoint + the
+  spec-004 tests that monkeypatch them still work).
 
-## Key decisions
+- `tests/api/routes/test_query_stream_provenance.py` (new) — 5 cases, offline (stubbed `aquery_llm` + chunk
+  store, monkeypatched `load_blocks_for_doc`).
 
-- **Opt-in default off** → the response is byte-identical to today unless asked; keeps the upstream fork delta
-  inert for non-guidelines deployments and rebases clean.
-- **Reuse `passage_links`, don't re-resolve** — single source of truth for the crop/pdf URL shape (spec 004
-  already put it there for exactly this consumer).
-- **`chunks` is a sibling of `references`, not nested in `ReferenceItem`** — provenance is per-chunk,
-  `ReferenceItem` is per-file; nesting would force a breaking reshape. Self-contained per-chunk entries let the
-  FE render directly and still join to `references` via `reference_id`.
+## Note
+
+This spec documents a complete implementation found **uncommitted** in the working tree (prior-session work,
+never committed → never deployed, which is why the live chat still showed `has_chunks=False`). Verified
+correct (scoped gate green) and committed here as the implement phase.
 
 ## Verify
 
-- Offline: new unit tests green; existing `query_routes` + `guidelines_retrieve` tests unaffected.
-- Shape parity: a chunk's `page/section/crop_url/pdf_url` on `/query/stream` equals what `:retrieve` returns
-  for the same `chunk_id` (both call `build_passage_links`).
+- Scoped gate green (205 passed: api/routes + grounding). Shape parity with `:retrieve` (both call
+  `build_passage_links`).
+- Post-deploy: `scratch/probe_chat_provenance.py` → `has_chunks=True` with page/section/crop_url on staging.

@@ -1,11 +1,12 @@
-# Tasks 011
+# Tasks 011 (as-built)
 
-- [ ] T1 — `query_routes.py`: import `passage_provenance`, `build_passage_links` from
-  `lightrag.sidecar.passage_links`; add `ChunkProvenance` model; add `include_chunk_provenance` flag
-  (+ exclude from `to_query_params`); add `chunks` field to `QueryResponse` + `StreamChunkResponse`.
-- [ ] T2 — `_build_chunk_provenance(rag, chunks)` helper (shared `blocks_cache`, best-effort).
-- [ ] T3 — wire into `/query` handler (populate `chunks` when `include_references && include_chunk_provenance`).
-- [ ] T4 — wire into `/query/stream` handler (first NDJSON line).
-- [ ] T5 — unit tests: flag-on enriches with page/section/crop_url; flag-off omits `chunks`; no-sidecar chunk
-  degrades to null provenance; shape matches `build_passage_links`.
-- [ ] T6 — run offline query + guidelines test suites green; caveman-review the diff.
+- [x] T1 — `query_routes.py`: `PassageLink` model; `ReferenceItem.chunks: Optional[List[PassageLink]]`.
+- [x] T2 — `_enrich_references_with_chunks(rag, references, chunks)` (shared `passage_links`, `blocks_cache`,
+  empty-chunk_id guard); replaces the inline content-only enrichment.
+- [x] T3 — wired into `/query` (non-stream) handler.
+- [x] T4 — wired into `/query/stream` handler.
+- [x] T5 — shared resolver extracted to `lightrag/sidecar/passage_links.py`; `guidelines_routes.py`
+  `:retrieve` refactored to reuse it (aliases kept for the section-crop endpoint + spec-004 tests).
+- [x] T6 — unit tests `tests/api/routes/test_query_stream_provenance.py` (5 cases). Scoped gate green
+  (205 passed: api/routes + grounding).
+- [ ] T7 — caveman-review the diff; PR → merge → deploy → live-verify `has_chunks=True` on staging.
