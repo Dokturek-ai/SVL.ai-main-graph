@@ -12,6 +12,7 @@ stable forward contract but does not filter by them yet (chunks are untagged);
 `concept_ref` is echoed on the response as the dual-source key against mkn10.
 """
 
+import asyncio
 import io
 import os
 import re
@@ -154,11 +155,14 @@ def _render_section_crop(pdf_path, page_number, bbox, *, scale: float = 2.0) -> 
     from PIL import Image, ImageDraw
 
     pdf = pdfium.PdfDocument(str(pdf_path))
+    page = bitmap = None
     try:
         page_index = int(page_number) - 1  # anchor is a 1-based page NUMBER
         if page_index < 0 or page_index >= len(pdf):
             raise ValueError(f"page {page_number} out of range (pdf has {len(pdf)} pages)")
-        pil = pdf[page_index].render(scale=scale).to_pil().convert("RGBA")
+        page = pdf[page_index]
+        bitmap = page.render(scale=scale)
+        pil = bitmap.to_pil().convert("RGBA")
         if bbox and len(bbox) == 4:
             px = _bbox_to_px(bbox, pil.width, pil.height)
             overlay = Image.new("RGBA", pil.size, (0, 0, 0, 0))
@@ -170,6 +174,11 @@ def _render_section_crop(pdf_path, page_number, bbox, *, scale: float = 2.0) -> 
         pil.convert("RGB").save(buf, format="PNG")
         return buf.getvalue()
     finally:
+        # release native pdfium handles explicitly (pdf.close() doesn't close open child pages)
+        if bitmap is not None:
+            bitmap.close()
+        if page is not None:
+            page.close()
         pdf.close()
 
 
@@ -221,9 +230,10 @@ def create_guidelines_routes(rag, api_key: Optional[str] = None):
                     if (chunk_id and has_page)
                     else None
                 )
+                pdf_name = Path(file_path).name if file_path else ""
                 pdf_url = (
-                    "/v1/guidelines/pdf?" + urllib.parse.urlencode({"doc": file_path})
-                    if (file_path and file_path != "unknown_source")
+                    "/v1/guidelines/pdf?" + urllib.parse.urlencode({"doc": pdf_name})
+                    if (pdf_name and file_path != "unknown_source")
                     else None
                 )
                 passages.append(
@@ -362,13 +372,20 @@ def create_guidelines_routes(rag, api_key: Optional[str] = None):
         file_path = chunk.get("file_path", "")
         blocks = _load_blocks_for_doc(file_path)
         prov = resolve_provenance(sidecar, blocks) if blocks else None
-        if not prov or prov.get("page") is None:
+        try:
+            page_num = int(prov["page"]) if prov and prov.get("page") is not None else None
+        except (TypeError, ValueError):
+            page_num = None
+        if page_num is None:
             raise HTTPException(status_code=404, detail="chunk has no resolvable page/bbox")
         pdf_path = Path(configured_input_dir()) / Path(file_path).name
         if not pdf_path.exists():
             raise HTTPException(status_code=404, detail="source PDF not available")
         try:
-            png = _render_section_crop(pdf_path, prov["page"], prov.get("bbox"))
+            # CPU-bound rasterization off the event loop
+            png = await asyncio.to_thread(
+                _render_section_crop, pdf_path, page_num, prov.get("bbox")
+            )
         except Exception as e:
             logger.warning("section-crop render failed for %s: %s", chunk_id, e)
             raise HTTPException(status_code=500, detail="crop render failed")
