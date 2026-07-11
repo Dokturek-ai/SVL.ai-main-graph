@@ -77,7 +77,9 @@ def validate_concept_refs(
     """Drop any ``concept_ref`` whose MKN-10 ``code ∉ spine``. Returns ``(kept, dropped)``.
 
     Verify-or-abstain, no network. Non-MKN-10 systems (SNOMED, ATC) are kept as-is — the spine is
-    the MKN-10 code set only, and mkn10 crosswalks the other systems downstream.
+    the MKN-10 code set only, and mkn10 crosswalks the other systems downstream. A malformed MKN-10
+    ref with no ``code`` also lands in ``dropped`` (``None ∉ spine``) — ``ground_entity`` never emits
+    one, so this is just a safe-drop of bad input, not a distinguished error class.
     """
     kept: list[dict[str, str]] = []
     dropped: list[dict[str, str]] = []

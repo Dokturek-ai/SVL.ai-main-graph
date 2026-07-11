@@ -135,6 +135,17 @@ def test_parse_concept_ref_prefers_longer_code_over_prefix():
 
 
 @pytest.mark.offline
+def test_parse_concept_ref_matches_code_before_sentence_period():
+    # the LLM commonly ends with a period — the trailing '.' is NOT a code continuation
+    candidates = [
+        {"code": "F32.0", "display": "lehká depresivní fáze", "system": MKN10_SYSTEM}
+    ]
+    assert parse_concept_ref("Kód je F32.0.", candidates) == [
+        {"system": MKN10_SYSTEM, "code": "F32.0", "display": "lehká depresivní fáze"}
+    ]
+
+
+@pytest.mark.offline
 async def test_ground_entity_empty_candidates_abstains_without_llm():
     async def api(url, headers):
         return {"results": []}

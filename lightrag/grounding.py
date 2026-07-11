@@ -138,8 +138,10 @@ def parse_concept_ref(
         code = c.get("code")
         if not code:
             continue
-        # standalone token — a '.' or word char on either side is part of a longer code
-        if re.search(rf"(?<![\w.]){re.escape(code)}(?![\w.])", text, re.IGNORECASE):
+        # standalone token: a leading '.'/word char means we're inside a longer code, but a
+        # TRAILING '.' is a sentence period ("Kód je F32.0.") — only a trailing word char
+        # (e.g. "F32" inside "F320") is a real code continuation.
+        if re.search(rf"(?<![\w.]){re.escape(code)}(?![\w])", text, re.IGNORECASE):
             return [
                 {"system": c["system"], "code": code, "display": c.get("display", "")}
             ]
