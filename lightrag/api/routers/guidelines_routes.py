@@ -20,7 +20,7 @@ import zipfile
 from pathlib import Path
 from typing import List, Literal, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -228,5 +228,69 @@ def create_guidelines_routes(rag, api_key: Optional[str] = None):
             media_type="application/zip",
             headers={"Content-Disposition": "attachment; filename=guidelines-bundle.zip"},
         )
+
+    @router.get("/v1/guidelines/_debug/section-crop", dependencies=[Depends(combined_auth)])
+    async def _debug_section_crop(chunk_id: str = Query(...)):
+        """TEMPORARY (guidelines-section-crop-substrate-verify): confirm the crop substrate on the
+        deployment — (1) chunk `sidecar` persists in the store, (2) `<doc>.parsed/blocks.jsonl` is on
+        the volume + resolves via resolve_provenance, (3) the source PDF path exists. Remove after
+        recording findings."""
+        from pathlib import Path as _P
+
+        from lightrag.sidecar.provenance import load_blocks_by_id, resolve_provenance
+        from lightrag.utils_pipeline import (
+            configured_input_dir,
+            parsed_artifact_dir_for,
+        )
+
+        chunk = await rag.text_chunks.get_by_id(chunk_id)
+        if not chunk:
+            raise HTTPException(status_code=404, detail=f"chunk not found: {chunk_id}")
+        sidecar = chunk.get("sidecar")
+        file_path = chunk.get("file_path", "")
+
+        parsed_dir = parsed_artifact_dir_for(file_path)
+        blocks_files = (
+            sorted(str(p) for p in parsed_dir.glob("*.blocks.jsonl"))
+            if parsed_dir.exists()
+            else []
+        )
+        provenance = None
+        blocks_count = 0
+        if blocks_files and sidecar:
+            try:
+                bbid = load_blocks_by_id(blocks_files[0])
+                blocks_count = len(bbid)
+                provenance = resolve_provenance(sidecar, bbid)
+            except Exception as e:  # pragma: no cover - debug endpoint
+                provenance = {"error": str(e)}
+
+        input_dir = _P(configured_input_dir())
+        stem = _P(file_path).stem
+        pdf_candidates = [
+            {"path": str(c), "exists": c.exists()}
+            for c in (input_dir / _P(file_path).name, input_dir / f"{stem}.pdf")
+        ]
+        input_listing = (
+            sorted(p.name for p in input_dir.iterdir())[:40]
+            if input_dir.exists()
+            else []
+        )
+
+        return {
+            "chunk_id": chunk_id,
+            "file_path": file_path,
+            "has_sidecar": sidecar is not None,
+            "sidecar": sidecar,
+            "parsed_dir": str(parsed_dir),
+            "parsed_dir_exists": parsed_dir.exists(),
+            "blocks_files": blocks_files,
+            "blocks_count": blocks_count,
+            "provenance": provenance,
+            "input_dir": str(input_dir),
+            "input_dir_exists": input_dir.exists(),
+            "input_listing_sample": input_listing,
+            "pdf_candidates": pdf_candidates,
+        }
 
     return router
