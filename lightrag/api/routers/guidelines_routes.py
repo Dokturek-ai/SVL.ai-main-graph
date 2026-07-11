@@ -20,7 +20,7 @@ import zipfile
 from pathlib import Path
 from typing import List, Literal, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -294,27 +294,5 @@ def create_guidelines_routes(rag, api_key: Optional[str] = None):
             media_type="application/zip",
             headers={"Content-Disposition": "attachment; filename=guidelines-bundle.zip"},
         )
-
-    @router.post(
-        "/v1/guidelines/_debug/upload-source-pdf", dependencies=[Depends(combined_auth)]
-    )
-    async def _debug_upload_source_pdf(file: UploadFile = File(...)):
-        """TEMPORARY (guidelines-section-crop-upload-pdfs): place a source PDF on the deployment volume
-        at ``<input_dir>/<name>`` so the section-crop render/serve endpoints (R3/R4) can read it. The
-        MinerU re-ingest kept only the sidecars; this backfills the originals. Write-only, no parsing,
-        no ingest. Remove after the upload run."""
-        from pathlib import Path as _P
-
-        from lightrag.utils_pipeline import configured_input_dir
-
-        name = _P(file.filename or "").name  # basename only — no path traversal
-        if not name.lower().endswith(".pdf"):
-            raise HTTPException(status_code=400, detail="only .pdf accepted")
-        input_dir = _P(configured_input_dir())
-        input_dir.mkdir(parents=True, exist_ok=True)
-        dest = input_dir / name
-        data = await file.read()
-        dest.write_bytes(data)
-        return {"name": name, "path": str(dest), "size": len(data)}
 
     return router
