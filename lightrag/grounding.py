@@ -11,17 +11,19 @@ ingest LLM owns the document context. Per **clinical** entity:
    shown (no hallucination). ``score_fused`` is NOT a usable confidence, so it is not thresholded.
 
 The live LLM (``llm_func``) and HTTP (``api``) calls are injected, so the core is unit-testable
-without an LLM or a live mkn10. Wiring this into the real ``extract_entities`` path (+ writing
-``concept_ref`` onto graph nodes + ``resolve_cache.jsonl``) is deferred to the combined Phase 0+1+2
-full-corpus run; here it is exercised probe-first (``scratch/probe_phase1_grounding.py``).
+without an LLM or a live mkn10. The extract-path wiring (spec 009) calls ``ground_entity_cached``
+from ``_merge_nodes_then_upsert`` once per unique clinical entity, cache-first via
+``resolve_cache.jsonl``; it is also exercised probe-first (``scratch/probe_phase1_grounding.py``).
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
 import urllib.request
+from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 from urllib.parse import urlencode
 
@@ -32,6 +34,23 @@ ATC_SYSTEM = "http://www.whocc.no/atc"
 
 _DRUG_TYPES = {"drug", "medication"}
 _SYSTEM_BY_DOMAIN = {"mkn10": MKN10_SYSTEM, "drug": ATC_SYSTEM}
+
+# Only these entity types are grounded. route_domain maps everything-not-drug to "mkn10", so it
+# CANNOT be used as the clinical gate (it would ground person/organization/other/table/… too).
+_CLINICAL_TYPES = {
+    "drug",
+    "medication",
+    "condition",
+    "diagnosis",
+    "symptom",
+    "procedure",
+    "labtest",
+}
+
+
+def is_clinical_type(node_type: Optional[str]) -> bool:
+    """True for the entity types worth grounding (drugs + the mkn10-codeable clinical set)."""
+    return (node_type or "").strip().lower() in _CLINICAL_TYPES
 
 # neural-search sits behind Cloudflare, which 1010-blocks the default urllib User-Agent.
 _BROWSER_UA = (
@@ -177,3 +196,81 @@ async def ground_entity(
     )
     resp = await llm_func(prompt)
     return parse_concept_ref(resp, candidates)
+
+
+# --- resolve cache (spec 009): cache-first so re-runs skip the LLM + neural-search ------------
+
+
+def resolve_cache_key(name: str, node_type: str, description: str) -> str:
+    """Stable key over ``name|type|description`` (whitespace-collapsed, lowercased)."""
+    norm = "|".join(
+        " ".join((part or "").split()).lower()
+        for part in (name, node_type, description)
+    )
+    return hashlib.sha256(norm.encode("utf-8")).hexdigest()
+
+
+def load_resolve_cache(path: str) -> dict[str, list[dict[str, str]]]:
+    """Read a JSONL ``{key, concept_ref}`` cache. Missing file ⇒ ``{}``; a corrupt line is skipped.
+
+    Best-effort: the cache is an optimisation, never a correctness dependency — a malformed line
+    (partial write, hand-edit) must not abort a grounding run.
+    """
+    cache: dict[str, list[dict[str, str]]] = {}
+    p = Path(path)
+    if not p.exists():
+        return cache
+    for line in p.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+            cache[rec["key"]] = rec["concept_ref"]
+        except (json.JSONDecodeError, KeyError, TypeError):
+            continue
+    return cache
+
+
+def append_resolve_cache(path: str, key: str, refs: list[dict[str, str]]) -> None:
+    """Append one ``{key, concept_ref}`` line (creating parent dirs if needed)."""
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with p.open("a", encoding="utf-8") as f:
+        f.write(json.dumps({"key": key, "concept_ref": refs}, ensure_ascii=False) + "\n")
+
+
+async def ground_entity_cached(
+    entity: dict[str, Any],
+    doc_context: str,
+    *,
+    cache: dict[str, list[dict[str, str]]],
+    cache_path: str,
+    llm_func: LlmFunc,
+    neural_base: str,
+    api: HttpGetJson = _default_http_get_json,
+    limit: int = 4,
+) -> list[dict[str, str]]:
+    """Cache-first ``ground_entity``. A hit returns the cached ``concept_ref`` with NO LLM/HTTP call;
+    a miss grounds, updates the in-run ``cache`` dict, and appends to ``cache_path``.
+
+    Abstains (``[]``) are cached too — an entity that failed to ground once should not re-spend the
+    LLM/mkn10 on the same ``(name, type, description)`` within/across runs.
+    """
+    name = entity.get("name") or entity.get("entity_name") or ""
+    node_type = entity.get("type") or entity.get("entity_type") or ""
+    description = entity.get("description") or ""
+    key = resolve_cache_key(name, node_type, description)
+    if key in cache:
+        return cache[key]
+    refs = await ground_entity(
+        entity,
+        doc_context,
+        llm_func=llm_func,
+        neural_base=neural_base,
+        api=api,
+        limit=limit,
+    )
+    cache[key] = refs
+    append_resolve_cache(cache_path, key, refs)
+    return refs

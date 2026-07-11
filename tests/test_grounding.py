@@ -11,10 +11,15 @@ from lightrag.grounding import (
     ATC_SYSTEM,
     MKN10_SYSTEM,
     _BROWSER_UA,
+    append_resolve_cache,
     build_grounding_prompt,
     ground_entity,
+    ground_entity_cached,
+    is_clinical_type,
+    load_resolve_cache,
     neural_search_candidates,
     parse_concept_ref,
+    resolve_cache_key,
     route_domain,
 )
 
@@ -205,3 +210,120 @@ def test_build_grounding_prompt_lists_candidates_and_asks_for_none():
     )
     assert "F320" in prompt and "Lehká depresivní fáze" in prompt
     assert "NONE" in prompt and "deprese" in prompt
+
+
+# --- resolve cache + wiring helpers (spec 009) ------------------------------------------------
+
+
+@pytest.mark.offline
+@pytest.mark.parametrize(
+    "node_type,expected",
+    [
+        ("drug", True),
+        ("Medication", True),
+        ("CONDITION", True),
+        ("diagnosis", True),
+        ("symptom", True),
+        ("procedure", True),
+        ("labtest", True),
+        ("person", False),
+        ("organization", False),
+        ("concept", False),
+        ("other", False),
+        ("table", False),
+        ("", False),
+        (None, False),
+    ],
+)
+def test_is_clinical_type(node_type, expected):
+    assert is_clinical_type(node_type) is expected
+
+
+@pytest.mark.offline
+def test_resolve_cache_key_normalizes_and_distinguishes():
+    base = resolve_cache_key("Deprese", "condition", "porucha nálady")
+    # case + surrounding/collapsed whitespace do not change the key
+    assert base == resolve_cache_key("  deprese ", "Condition", "porucha   nálady")
+    # any material field change does
+    assert base != resolve_cache_key("Deprese", "condition", "jiný popis")
+    assert base != resolve_cache_key("Úzkost", "condition", "porucha nálady")
+    assert base != resolve_cache_key("Deprese", "symptom", "porucha nálady")
+
+
+@pytest.mark.offline
+def test_load_resolve_cache_missing_is_empty(tmp_path):
+    assert load_resolve_cache(str(tmp_path / "nope.jsonl")) == {}
+
+
+@pytest.mark.offline
+def test_resolve_cache_roundtrip_and_skips_corrupt_line(tmp_path):
+    path = str(tmp_path / "resolve_cache.jsonl")
+    ref = [{"system": MKN10_SYSTEM, "code": "F32.0", "display": "d"}]
+    append_resolve_cache(path, "k1", ref)
+    append_resolve_cache(path, "k2", [])
+    # a hand-corrupted / partial line must not abort the load
+    with open(path, "a", encoding="utf-8") as f:
+        f.write("{not json\n")
+    cache = load_resolve_cache(path)
+    assert cache == {"k1": ref, "k2": []}
+
+
+@pytest.mark.offline
+async def test_ground_entity_cached_hit_calls_nothing(tmp_path):
+    entity = {"name": "amlodipin", "type": "drug", "description": "blokátor Ca"}
+    key = resolve_cache_key("amlodipin", "drug", "blokátor Ca")
+    cached = [{"system": ATC_SYSTEM, "code": "C08CA01", "display": "AMLODIPIN"}]
+    cache = {key: cached}
+
+    async def api(url, headers):  # pragma: no cover - must not be called
+        raise AssertionError("neural-search called on a cache hit")
+
+    async def llm_func(prompt):  # pragma: no cover - must not be called
+        raise AssertionError("llm_func called on a cache hit")
+
+    got = await ground_entity_cached(
+        entity,
+        "kontext",
+        cache=cache,
+        cache_path=str(tmp_path / "c.jsonl"),
+        llm_func=llm_func,
+        neural_base="https://mkn10.example",
+        api=api,
+    )
+    assert got == cached
+
+
+@pytest.mark.offline
+async def test_ground_entity_cached_miss_grounds_appends_then_hits(tmp_path):
+    path = str(tmp_path / "c.jsonl")
+    cache: dict = {}
+    calls = {"api": 0, "llm": 0}
+
+    async def api(url, headers):
+        calls["api"] += 1
+        return {"results": [{"atc5": "C08CA01", "inn": "AMLODIPIN", "score_fused": 0.03}]}
+
+    async def llm_func(prompt):
+        calls["llm"] += 1
+        return "C08CA01"
+
+    entity = {"name": "amlodipin", "type": "drug", "description": "blokátor Ca"}
+    args = dict(
+        cache=cache,
+        cache_path=path,
+        llm_func=llm_func,
+        neural_base="https://mkn10.example",
+        api=api,
+    )
+
+    first = await ground_entity_cached(entity, "kontext", **args)
+    assert first == [{"system": ATC_SYSTEM, "code": "C08CA01", "display": "AMLODIPIN"}]
+    assert calls == {"api": 1, "llm": 1}
+    # persisted to the file AND held in the in-run cache
+    assert load_resolve_cache(path) == {
+        resolve_cache_key("amlodipin", "drug", "blokátor Ca"): first
+    }
+
+    second = await ground_entity_cached(entity, "kontext", **args)
+    assert second == first
+    assert calls == {"api": 1, "llm": 1}  # no new calls on the hit
