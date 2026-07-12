@@ -5,6 +5,7 @@ This module contains all graph-related routes for the LightRAG API.
 from typing import Optional, Dict, Any
 import json
 import os
+import time
 import traceback
 from collections import Counter
 from pathlib import Path
@@ -773,7 +774,8 @@ def create_graph_routes(rag, api_key: Optional[str] = None):
         _DEDUP_STATUS_PATH.parent.mkdir(parents=True, exist_ok=True)
 
         def _write(state: dict):
-            _DEDUP_STATUS_PATH.write_text(json.dumps(state), encoding="utf-8")
+            # stamp a heartbeat so a "running" left stale by a container restart is recoverable (see guard)
+            _DEDUP_STATUS_PATH.write_text(json.dumps({**state, "ts": time.time()}), encoding="utf-8")
 
         total = len(plan.merges)
         _write({"state": "running", "merged": 0, "total": total})
@@ -792,7 +794,9 @@ def create_graph_routes(rag, api_key: Optional[str] = None):
             except Exception as e:  # noqa: BLE001 — one bad cluster must not abort the pass
                 failed += 1
                 logger.warning(f"dedup: merge into '{m.survivor}' failed: {e}")
-            if (merged + failed) % 50 == 0:
+            # heartbeat every 10 (small enough that a live run's gap stays well under the stale threshold,
+            # even during slow hub merges)
+            if (merged + failed) % 10 == 0:
                 _write({"state": "running", "merged": merged, "failed": failed, "total": total})
         _write(
             {
@@ -823,9 +827,14 @@ def create_graph_routes(rag, api_key: Optional[str] = None):
                 ]
                 return summary
             await check_pipeline_busy_or_raise(rag)  # do not dedup mid-ingest
+            # Refuse a concurrent apply — but only if a run is genuinely LIVE. A run left "running" by a
+            # container restart (e.g. a redeploy mid-run) has a stale heartbeat; treat it as dead so the
+            # (idempotent) pass can be resumed instead of being wedged forever.
+            _DEDUP_STALE_S = float(os.getenv("DEDUP_STALE_SECONDS", "600"))
             if _DEDUP_STATUS_PATH.exists():
                 try:
-                    if json.loads(_DEDUP_STATUS_PATH.read_text(encoding="utf-8")).get("state") == "running":
+                    st = json.loads(_DEDUP_STATUS_PATH.read_text(encoding="utf-8"))
+                    if st.get("state") == "running" and (time.time() - float(st.get("ts", 0))) < _DEDUP_STALE_S:
                         raise HTTPException(status_code=409, detail="a dedup apply run is already in progress")
                 except HTTPException:
                     raise
