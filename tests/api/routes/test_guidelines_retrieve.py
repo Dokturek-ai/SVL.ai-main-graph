@@ -6,11 +6,14 @@ empty-result path.
 """
 
 import importlib
+import json
 import sys
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
+MKN = "https://uzis.cz/terminology/CodeSystem/mkn-10"
 
 # Import the router under a clean argv: importing the api routers pulls in
 # lightrag.api.{auth,config}, which parse_args() at import time and would choke
@@ -44,21 +47,40 @@ class _TextChunks:
         return self.rec
 
 
+class _Node:
+    """Fake KnowledgeGraphNode: only ``.properties`` is read by the index builder."""
+
+    def __init__(self, entity_id, concept_ref=None, source_id=""):
+        self.properties = {"entity_id": entity_id, "source_id": source_id}
+        if concept_ref is not None:
+            self.properties["concept_ref"] = json.dumps(concept_ref)
+
+
+class _KG:
+    def __init__(self, nodes):
+        self.nodes = nodes
+
+
 class StubRag:
     """Minimal rag whose aquery_data returns canned chunks (no retrieval).
 
     ``chunk_record`` (optional) is what ``text_chunks.get_by_id`` returns — set it to exercise the
-    section-crop provenance path; omit it to leave `text_chunks` absent (degrade path)."""
+    section-crop provenance path; omit it to leave `text_chunks` absent (degrade path).
+    ``graph_nodes`` (spec 014) seeds the concept_ref→chunks index via ``get_knowledge_graph``."""
 
-    def __init__(self, chunks, chunk_record=None):
+    def __init__(self, chunks, chunk_record=None, graph_nodes=None):
         self._chunks = chunks
         self.calls = []
+        self._graph_nodes = graph_nodes or []
         if chunk_record is not None:
             self.text_chunks = _TextChunks(chunk_record)
 
     async def aquery_data(self, query, param):
         self.calls.append((query, param))
         return {"status": "success", "data": {"chunks": self._chunks}, "metadata": {}}
+
+    async def get_knowledge_graph(self, **kwargs):
+        return _KG(self._graph_nodes)
 
 
 def _chunk(content, file_path, chunk_id, score=None):
@@ -121,12 +143,47 @@ def test_score_absent_is_null():
     assert p["score"] is None
 
 
-def test_concept_ref_echoed_and_not_filtered():
+def test_concept_ref_echoed():
     chunks = [_chunk("x", "Foo_2020.md", "c1")]
-    body = {"top_k": 1, "concept_ref": {"mkn10_code": "I10"}, "facet": "diagnosis"}
-    data = _post(make_client(chunks), **body).json()
+    data = _post(make_client(chunks), top_k=1, concept_ref={"mkn10_code": "I10"}).json()
     assert data["concept_ref"] == {"mkn10_code": "I10", "cui": None}
-    assert data["filtered"] is False
+
+
+def test_concept_ref_filters_to_the_code_chunks():
+    # I10 grounded to c1,c2 (dotted/dotless + family); c3 is out of scope → excluded; filtered=True.
+    chunks = [_chunk(t, "Foo_2024.md", cid) for t, cid in [("a", "c1"), ("b", "c2"), ("c", "c3")]]
+    nodes = [
+        _Node("Hypertenze", [{"code": "I10", "system": MKN}], "c1"),
+        _Node("Arteriální Hypertenze", [{"code": "I10.9", "system": MKN}], "c2"),
+        _Node("Něco Jiného", [{"code": "J45", "system": MKN}], "c3"),
+    ]
+    rag = StubRag(chunks, graph_nodes=nodes)
+    app = FastAPI()
+    app.include_router(create_guidelines_routes(rag, api_key=None))
+    data = TestClient(app).post(
+        "/v1/guidelines:retrieve",
+        json={"query": "léčba hypertenze", "top_k": 5, "concept_ref": {"mkn10_code": "I10"}},
+    ).json()
+    assert data["filtered"] is True
+    cids = {c["citation"] for c in data["passages"]}
+    assert any("chunk=c1" in c for c in cids) and any("chunk=c2" in c for c in cids)
+    assert not any("chunk=c3" in c for c in cids)  # J45 chunk excluded
+    assert len(data["passages"]) == 2
+    assert data["passages"][0]["concept_ref"] == {"mkn10_code": "I10", "cui": None}
+
+
+def test_unresolvable_code_falls_back_to_plain_retrieval():
+    chunks = [_chunk("a", "Foo_2024.md", "c1")]
+    nodes = [_Node("Hypertenze", [{"code": "I10", "system": MKN}], "c1")]
+    rag = StubRag(chunks, graph_nodes=nodes)  # E11 has no grounded chunks
+    app = FastAPI()
+    app.include_router(create_guidelines_routes(rag, api_key=None))
+    data = TestClient(app).post(
+        "/v1/guidelines:retrieve",
+        json={"query": "dotaz", "top_k": 5, "concept_ref": {"mkn10_code": "E11"}},
+    ).json()
+    assert data["filtered"] is False  # no in-scope chunks → graceful plain fallback
+    assert len(data["passages"]) == 1
 
 
 def test_empty_retrieval_returns_empty_not_error():
@@ -136,14 +193,30 @@ def test_empty_retrieval_returns_empty_not_error():
     assert r.json()["passages"] == []
 
 
-def test_facet_and_concept_ref_are_noop_v1():
-    """Supplying filters must not change results vs not supplying them (v1 no-op)."""
-    chunks = [_chunk(f"span {i}", "Foo_2021.md", f"c{i}") for i in range(4)]
-    plain = _post(make_client(chunks), top_k=4).json()["passages"]
-    filtered = _post(
-        make_client(chunks), top_k=4, facet="dosing", concept_ref={"cui": "C0020538"}
-    ).json()["passages"]
-    assert plain == filtered
+def test_facet_matching_section_is_kept_and_marked(monkeypatch):
+    # _BLOCK heading "Léčba" (parent "Arteriální hypertenze") → section classifies as "treatment".
+    monkeypatch.setattr(_guidelines_routes, "_load_blocks_for_doc", lambda _fp: _BLOCKS_BY_ID)
+    rag = StubRag([_chunk("span", "AH_2008.pdf", "c1")], chunk_record={"sidecar": _SIDECAR})
+    app = FastAPI()
+    app.include_router(create_guidelines_routes(rag, api_key=None))
+    data = TestClient(app).post(
+        "/v1/guidelines:retrieve", json={"query": "léčba", "top_k": 5, "facet": "treatment"}
+    ).json()
+    assert data["filtered"] is True
+    assert data["passages"][0]["facet"] == "treatment"
+
+
+def test_facet_no_match_falls_back_to_plain(monkeypatch):
+    monkeypatch.setattr(_guidelines_routes, "_load_blocks_for_doc", lambda _fp: _BLOCKS_BY_ID)
+    rag = StubRag([_chunk("span", "AH_2008.pdf", "c1")], chunk_record={"sidecar": _SIDECAR})
+    app = FastAPI()
+    app.include_router(create_guidelines_routes(rag, api_key=None))
+    # section is "treatment"; asking for "dosing" matches nothing → graceful fallback, filtered=False
+    data = TestClient(app).post(
+        "/v1/guidelines:retrieve", json={"query": "dotaz", "top_k": 5, "facet": "dosing"}
+    ).json()
+    assert data["filtered"] is False
+    assert len(data["passages"]) == 1  # plain fallback keeps the passage
 
 
 def test_content_missing_chunk_skipped():
