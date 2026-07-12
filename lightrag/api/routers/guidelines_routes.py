@@ -14,9 +14,11 @@ stable forward contract but does not filter by them yet (chunks are untagged);
 
 import asyncio
 import io
+import json
 import os
 import re
 import tempfile
+import time
 import zipfile
 from pathlib import Path
 from typing import List, Literal, Optional
@@ -33,6 +35,12 @@ from lightrag.sidecar.passage_links import (
     passage_provenance,
 )
 from lightrag.sidecar.provenance import resolve_provenance
+from lightrag.guidelines.retrieve_filter import (
+    build_code_index,
+    chunks_for_code,
+    classify_facet,
+    facet_matches,
+)
 from lightrag.utils import logger
 
 # Where the promotion pass writes the immutable bundle (data volume so it survives a redeploy).
@@ -155,53 +163,111 @@ def create_guidelines_routes(rag, api_key: Optional[str] = None):
 
     combined_auth = get_combined_auth_dependency(api_key)
 
+    # --- concept_ref → chunks index (spec 014): entities carry concept_ref + source_id; cache the
+    # code→chunks map (rebuilt on TTL — the graph changes only on re-ground/dedup). ---
+    _code_index: dict = {"at": 0.0, "map": {}}
+    _index_lock = asyncio.Lock()
+    _INDEX_TTL = float(os.getenv("RETRIEVE_INDEX_TTL", "600"))
+
+    async def _get_code_index() -> dict:
+        now = time.monotonic()
+        if _code_index["map"] and now - _code_index["at"] < _INDEX_TTL:
+            return _code_index["map"]
+        async with _index_lock:
+            now = time.monotonic()
+            if _code_index["map"] and now - _code_index["at"] < _INDEX_TTL:
+                return _code_index["map"]
+            kg = await rag.get_knowledge_graph(node_label="*", max_depth=1, max_nodes=1_000_000)
+            entities = []
+            for n in getattr(kg, "nodes", []) or []:
+                p = getattr(n, "properties", None) or {}
+                raw = p.get("concept_ref")
+                if not raw:
+                    continue
+                try:
+                    refs = json.loads(raw) if isinstance(raw, str) else raw
+                except Exception:  # noqa: BLE001
+                    continue
+                entities.append((refs, p.get("source_id")))
+            _code_index["map"] = build_code_index(entities)
+            _code_index["at"] = time.monotonic()
+            return _code_index["map"]
+
     @router.post(
         "/v1/guidelines:retrieve",
         response_model=GuidelineRetrieveResponse,
         dependencies=[Depends(combined_auth)],
     )
     async def guidelines_retrieve(request: GuidelineRetrieveRequest):
-        """Return up to top_k cited passage spans for the query (retrieval only, no LLM)."""
+        """Return up to top_k cited passage spans for the query (retrieval only, no LLM).
+
+        v2 (spec 014): ``concept_ref.mkn10_code`` scopes to the dg's chunks and ``facet`` focuses the
+        section; both fall back to plain retrieval when unresolvable/empty (never worse than v1).
+        """
         try:
+            code = request.concept_ref.mkn10_code if request.concept_ref else None
+            allow: Optional[set] = None
+            if code:
+                try:
+                    allow = chunks_for_code(await _get_code_index(), code) or None
+                except Exception as e:  # noqa: BLE001 — index unavailable ⇒ plain retrieval, no error
+                    logger.warning(f"retrieve: concept_ref index unavailable, plain retrieval: {e}")
+                    allow = None
+
+            want_filter = allow is not None or bool(request.facet)
+            # A concept_ref filter narrows a wide pool; widen retrieval so enough in-scope chunks survive.
+            pool = max(request.top_k * 6, 60) if want_filter else request.top_k
             param = QueryParam(
-                mode=request.mode,
-                top_k=request.top_k,
-                chunk_top_k=request.top_k,
-                only_need_context=True,
+                mode=request.mode, top_k=pool, chunk_top_k=pool, only_need_context=True
             )
             result = await rag.aquery_data(request.query, param)
             chunks = (result or {}).get("data", {}).get("chunks", []) or []
 
-            passages: List[RetrievedPassage] = []
-            blocks_cache: dict = {}  # per-request: a doc's blocks.jsonl loads once across its chunks
-            for chunk in chunks[: request.top_k]:
-                content = chunk.get("content")
-                if not content:
-                    continue
-                file_path = chunk.get("file_path", "unknown_source")
-                chunk_id = chunk.get("chunk_id", "")
-                edition = _edition_from_filename(file_path)
-                # Pass the loader explicitly so a test monkeypatching this module's
-                # ``_load_blocks_for_doc`` still drives resolution (the alias points at passage_links).
-                prov = (
-                    await passage_provenance(
-                        rag, chunk_id, file_path, blocks_cache, load_blocks=_load_blocks_for_doc
+            async def _build(apply_filter: bool) -> List[RetrievedPassage]:
+                out: List[RetrievedPassage] = []
+                blocks_cache: dict = {}  # per-build: a doc's blocks.jsonl loads once across its chunks
+                for chunk in chunks:
+                    content = chunk.get("content")
+                    if not content:
+                        continue
+                    chunk_id = chunk.get("chunk_id", "")
+                    if apply_filter and allow is not None and chunk_id not in allow:
+                        continue
+                    file_path = chunk.get("file_path", "unknown_source")
+                    prov = (
+                        await passage_provenance(
+                            rag, chunk_id, file_path, blocks_cache, load_blocks=_load_blocks_for_doc
+                        )
+                        or {}
                     )
-                    or {}
-                )
-                passages.append(
-                    RetrievedPassage(
-                        text=content,
-                        citation=f"{file_path}#chunk={chunk_id}@{edition}",
-                        score=chunk.get("score"),
-                        **build_passage_links(chunk_id, file_path, prov),
+                    facet = classify_facet(prov.get("section"))
+                    if apply_filter and not facet_matches(facet, request.facet):
+                        continue
+                    out.append(
+                        RetrievedPassage(
+                            text=content,
+                            citation=f"{file_path}#chunk={chunk_id}@{_edition_from_filename(file_path)}",
+                            score=chunk.get("score"),
+                            facet=facet,
+                            concept_ref=request.concept_ref if (apply_filter and allow is not None) else None,
+                            **build_passage_links(chunk_id, file_path, prov),
+                        )
                     )
-                )
+                    if len(out) >= request.top_k:
+                        break
+                return out
+
+            passages = await _build(apply_filter=want_filter)
+            filtered = want_filter and bool(passages)
+            if want_filter and not passages:
+                # focus emptied the result → graceful fallback to plain retrieval (no regression)
+                passages = await _build(apply_filter=False)
+                filtered = False
 
             return GuidelineRetrieveResponse(
                 passages=passages,
                 concept_ref=request.concept_ref,
-                filtered=False,
+                filtered=filtered,
             )
         except Exception as e:
             logger.error(f"Error in guidelines:retrieve: {str(e)}", exc_info=True)
