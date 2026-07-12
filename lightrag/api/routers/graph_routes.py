@@ -3,11 +3,16 @@ This module contains all graph-related routes for the LightRAG API.
 """
 
 from typing import Optional, Dict, Any
+import json
+import os
 import traceback
-from fastapi import APIRouter, Depends, Query, HTTPException
+from collections import Counter
+from pathlib import Path
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
 from lightrag.base import DeletionResult
+from lightrag.maintenance.dedup import NodeView, plan_dedup
 from lightrag.utils import logger
 from ..utils_api import get_combined_auth_dependency
 from .document_routes import check_pipeline_busy_or_raise
@@ -728,6 +733,122 @@ def create_graph_routes(rag, api_key: Optional[str] = None):
             raise HTTPException(
                 status_code=500, detail=f"Error merging entities: {str(e)}"
             )
+
+    # --- entity casing/whitespace dedup (spec 013) -----------------------------------------------
+    _DEDUP_STATUS_PATH = Path(
+        os.getenv("DEDUP_STATUS_DIR", "/app/data/maintenance")
+    ) / "dedup-status.json"
+
+    async def _build_dedup_plan():
+        """Pull the whole live graph and plan the casing/whitespace merges (pure planner does the rest)."""
+        kg = await rag.get_knowledge_graph(node_label="*", max_depth=1, max_nodes=1_000_000)
+        degree: Counter = Counter()
+        for e in kg.edges:
+            degree[e.source] += 1
+            degree[e.target] += 1
+        nodes = []
+        for n in kg.nodes:
+            name = n.properties.get("entity_id") or n.id
+            raw = n.properties.get("concept_ref")
+            try:
+                cref = json.loads(raw) if isinstance(raw, str) else raw
+            except Exception:
+                cref = None
+            nodes.append(NodeView(name=name, concept_ref=cref, degree=degree.get(n.id, 0)))
+        return plan_dedup(nodes)
+
+    def _dedup_summary(plan) -> dict:
+        return {
+            "clusters": len(plan.merges) + len(plan.conflicts),
+            "merges": len(plan.merges),
+            "collapsible": plan.collapsible,
+            "conflicts": len(plan.conflicts),
+            "conflict_sample": [
+                {"names": c.names, "codes": c.codes} for c in plan.conflicts[:25]
+            ],
+        }
+
+    async def _run_dedup(plan):
+        """Apply the merge plan via amerge_entities (background). Idempotent: a re-run finds ~0 clusters."""
+        _DEDUP_STATUS_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+        def _write(state: dict):
+            _DEDUP_STATUS_PATH.write_text(json.dumps(state), encoding="utf-8")
+
+        total = len(plan.merges)
+        _write({"state": "running", "merged": 0, "total": total})
+        merged = failed = 0
+        for m in plan.merges:
+            try:
+                # amerge_entities merges concept_ref with keep_first over [sources…, target], so the
+                # survivor would inherit a SOURCE's ref, not the reconciled most-specific one — stamp it.
+                target_data = {"concept_ref": json.dumps(m.ref, ensure_ascii=False)} if m.ref else None
+                await rag.amerge_entities(
+                    source_entities=m.sources,
+                    target_entity=m.survivor,
+                    target_entity_data=target_data,
+                )
+                merged += 1
+            except Exception as e:  # noqa: BLE001 — one bad cluster must not abort the pass
+                failed += 1
+                logger.warning(f"dedup: merge into '{m.survivor}' failed: {e}")
+            if (merged + failed) % 50 == 0:
+                _write({"state": "running", "merged": merged, "failed": failed, "total": total})
+        _write(
+            {
+                "state": "done",
+                "merged": merged,
+                "failed": failed,
+                "total": total,
+                "conflicts_skipped": len(plan.conflicts),
+            }
+        )
+        logger.info(f"dedup: done — merged={merged} failed={failed} conflicts_skipped={len(plan.conflicts)}")
+
+    @router.post("/graph:dedup", dependencies=[Depends(combined_auth)])
+    async def graph_dedup(background_tasks: BackgroundTasks, apply: bool = Query(False)):
+        """Collapse casing/whitespace/diacritic duplicate entity nodes (spec 013).
+
+        ``apply=false`` (default) is a DRY-RUN: pull the graph, plan the merges, return counts + the
+        conflict sample — no mutation. ``apply=true`` runs the merges in the background (poll
+        ``GET /graph:dedup/status``); code-conflict clusters are always skipped, never auto-merged.
+        """
+        try:
+            plan = await _build_dedup_plan()
+            summary = _dedup_summary(plan)
+            if not apply:
+                summary["dry_run"] = True
+                summary["merge_sample"] = [
+                    {"survivor": m.survivor, "sources": m.sources} for m in plan.merges[:25]
+                ]
+                return summary
+            await check_pipeline_busy_or_raise(rag)  # do not dedup mid-ingest
+            if _DEDUP_STATUS_PATH.exists():
+                try:
+                    if json.loads(_DEDUP_STATUS_PATH.read_text(encoding="utf-8")).get("state") == "running":
+                        raise HTTPException(status_code=409, detail="a dedup apply run is already in progress")
+                except HTTPException:
+                    raise
+                except Exception:  # noqa: BLE001 — unreadable status ⇒ treat as not-running
+                    pass
+            background_tasks.add_task(_run_dedup, plan)
+            return {"status": "started", "status_url": "/graph:dedup/status", **summary}
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"graph:dedup error: {str(e)}")
+            logger.error(traceback.format_exc())
+            raise HTTPException(status_code=500, detail=f"graph:dedup error: {str(e)}")
+
+    @router.get("/graph:dedup/status", dependencies=[Depends(combined_auth)])
+    async def graph_dedup_status():
+        """State of the latest dedup apply run (none/running/done)."""
+        if not _DEDUP_STATUS_PATH.exists():
+            return {"state": "none"}
+        try:
+            return json.loads(_DEDUP_STATUS_PATH.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            return {"state": "unknown"}
 
     @router.delete(
         "/graph/entity/delete",
