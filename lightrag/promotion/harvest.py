@@ -15,6 +15,7 @@ Snapshot schema written (consumed by registry/promote):
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -46,6 +47,19 @@ def _prop(record: dict, key: str, default: Any = "") -> Any:
     return default
 
 
+def _concept_ref(value: Any) -> Any:
+    """concept_ref is stored on the graph node as a JSON-encoded string (a list of
+    ``{code, system}`` refs). Parse it back to structured JSON for the bundle; None-safe."""
+    if not value:
+        return None
+    if isinstance(value, (list, dict)):
+        return value
+    try:
+        return json.loads(value)
+    except Exception:
+        return None
+
+
 async def harvest(rag: Any, out_dir: str | Path) -> dict[str, int]:
     """Dump the deployed store to ``out_dir`` as four JSONL files.
 
@@ -64,6 +78,7 @@ async def harvest(rag: Any, out_dir: str | Path) -> dict[str, int]:
             "description": _prop(n, "description"),
             "source_ids": _split(_prop(n, "source_id")),
             "file_paths": _split(_prop(n, "file_path")),
+            "concept_ref": _concept_ref(_prop(n, "concept_ref", None)),
         }
         for n in raw_nodes
     ]
