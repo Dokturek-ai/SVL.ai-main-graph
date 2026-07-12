@@ -30,19 +30,29 @@ pass already casefold-canonicalizes the **bundle** (bundle = 0 dups), so mkn10's
 
 Entity identity is **case- and whitespace-insensitive**. Two parts, both shipped:
 
-1. **Prevent-new (core).** An entity resolves to a node by a **normalized key** (casefold + whitespace-
-   collapse), not the raw surface form. First-seen surface form is kept as the node's **display**; later
-   casing/whitespace variants resolve to and merge into it. Dedup is guaranteed regardless of which casing
-   wins; the display stays human-correct (`eGFR`, not `egfr`). Fix point + mechanism (in-batch grouping key
-   vs storage-layer normalized resolution vs reuse of the promotion canonicalizer) → `plan.md`.
+1. **Prevent-new.** An entity resolves to a node by a **canonical key**, not the raw surface form. The key
+   is the **existing, proven `lightrag/promotion/canonicalize.py:merge_key`** (casefold + strip diacritics +
+   strip punct + collapse whitespace + alias-table) — the SAME function promotion already uses to
+   canonicalize the bundle. Reusing it (vs a new narrow casing+ws key) gives **live↔bundle consistency by
+   construction** and is proven. A false-merge probe (`scratch/probe_mergekey_falsemerge.py`) confirms it is
+   safe: `merge_key` collapses 6 484 nodes (16.26 %) vs the narrow key's 5 921, and adds only accent-typo
+   catches (`Migréna`≡`Migrena`, `Dyslipidémie`≡`Dyslipidemie`) — **no new false merges** (the ~47 clusters
+   whose members carry different codes exist under BOTH keys and are a grounding-consistency artifact, not an
+   over-merge). Display = the deterministic min of the group's variants (mirrors `promote.py`). Fix point +
+   mechanism → `plan.md`.
 
 2. **Migrate existing (one-shot).** Collapse the 5 921 existing dups via the first-class
    `amerge_entities` API (handles graph + entity-vdb + relation-vdb + KV; default strategy
    description=concatenate / entity_type=keep_first / source_id+file_path=join_unique). **Survivor per
    cluster:** the single grounded node if exactly one is grounded, else the highest-degree node, else
-   lexicographically-first (determinism). `concept_ref` reconciliation: survivor inherits the grounded
-   ref; a cluster with *conflicting* codes across variants (should be ~0 for casing-only) is logged and
-   left for manual review, never auto-merged blind.
+   lexicographically-first (determinism). `concept_ref` reconciliation (measured, `probe_true_conflicts.py`):
+   normalize codes first — **dot-normalize** (`N48.4`≡`N484`, 16 fake conflicts gone) and treat
+   **category⊃specific of the same 3-char family** as compatible (`N18`⊃`N18.9`, `I50`⊃`I50.9` — 28
+   clusters, keep the most-specific). That leaves only **7 genuinely-different-family conflicts** (I21 vs
+   I25.2, E11.2 vs E14.2, M00.9 vs M01.8, N18.9 vs N28.9, H53.9 vs H58.1, **I10 vs O10.0**, **E10 vs O24.0**)
+   → **logged, left unmerged**, never auto-merged. Two of the seven (I10/E10 vs the pregnancy-context
+   O-codes O10.0/O24.0) are real grounding ERRORS (a pregnancy-chapter poison the `clinical_only` filter
+   doesn't catch) → a follow-up grounding brief, not a dedup concern.
 
 ### Non-goals (explicitly OUT)
 
