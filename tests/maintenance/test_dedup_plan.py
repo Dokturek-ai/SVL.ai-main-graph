@@ -106,16 +106,48 @@ def test_survivor_stays_grounded_even_when_an_ungrounded_twin_has_higher_degree(
     assert "Chronické Onemocnění Ledvin" in plan.merges[0].sources
 
 
-def test_drug_concept_ids_do_not_cause_a_conflict():
-    # two casing-twins grounded to different c_… drug concept-ids must not be read as an MKN-10 conflict
-    ref_a = [{"code": "c_aaa", "system": "http://www.whocc.no/atc"}]
-    ref_b = [{"code": "c_bbb", "system": "http://www.whocc.no/atc"}]
+def _drug(code):
+    return [{"code": code, "system": "http://www.whocc.no/atc"}]
+
+
+def test_same_drug_concept_id_casing_twins_merge():
+    ref = _drug("c_aaa")
     plan = plan_dedup([
-        NodeView("Metipranolol", concept_ref=ref_a, degree=2),
-        NodeView("METIPRANOLOL", concept_ref=ref_b, degree=1),
+        NodeView("Metipranolol", concept_ref=ref, degree=2),
+        NodeView("METIPRANOLOL", concept_ref=ref, degree=1),
     ])
     assert plan.conflicts == []
-    assert len(plan.merges) == 1  # merged (drug refs are not reconciled by MKN family)
+    assert len(plan.merges) == 1
+    assert plan.merges[0].ref == ref  # a drug ref is not read as an MKN family conflict
+
+
+def test_different_drug_concept_ids_are_a_conflict():
+    # casing-twins of one drug name grounded to DIFFERENT concept-ids = a grounding disagreement → skip
+    plan = plan_dedup([
+        NodeView("Metipranolol", concept_ref=_drug("c_aaa"), degree=2),
+        NodeView("METIPRANOLOL", concept_ref=_drug("c_bbb"), degree=1),
+    ])
+    assert plan.merges == []
+    assert len(plan.conflicts) == 1
+
+
+def test_disease_and_drug_on_the_same_name_are_a_conflict():
+    plan = plan_dedup([
+        NodeView("Inzulin", concept_ref=_mkn("E10"), degree=2),
+        NodeView("inzulin", concept_ref=_drug("c_xxx"), degree=1),
+    ])
+    assert plan.merges == []
+    assert len(plan.conflicts) == 1
+
+
+def test_single_node_carrying_two_families_is_a_conflict():
+    # one node grounded to two different MKN families blocks the whole cluster (conservative, no bad merge)
+    plan = plan_dedup([
+        NodeView("Divný Node", concept_ref=_mkn("I21") + _mkn("N18"), degree=2),
+        NodeView("divný node", concept_ref=_mkn("I21"), degree=1),
+    ])
+    assert plan.merges == []
+    assert len(plan.conflicts) == 1
 
 
 def test_singletons_and_identical_names_are_noops():

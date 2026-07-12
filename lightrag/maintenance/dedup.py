@@ -58,17 +58,15 @@ def _dotnorm(code: str) -> str:
     return (code or "").replace(".", "").upper()
 
 
+def _is_drug(ref: dict) -> bool:
+    """A drug ref = an mkn10 `c_…` concept-id (ATC system) — opaque, no dot/family semantics."""
+    code = ref.get("code") or ""
+    return code.startswith("c_") or "atc" in (ref.get("system") or "").lower()
+
+
 def _mkn_refs(refs: list[dict] | None) -> list[dict]:
-    """MKN-10 refs only — skip ATC / drug `c_…` concept-ids (no dot/family semantics)."""
-    out = []
-    for r in refs or []:
-        code = r.get("code") or ""
-        system = (r.get("system") or "").lower()
-        if code.startswith("c_") or "atc" in system:
-            continue
-        if code:
-            out.append(r)
-    return out
+    """MKN-10 refs only (with a code) — skip drug `c_…` refs."""
+    return [r for r in (refs or []) if r.get("code") and not _is_drug(r)]
 
 
 def _pick_most_specific(refs: list[dict]) -> dict:
@@ -77,20 +75,25 @@ def _pick_most_specific(refs: list[dict]) -> dict:
 
 
 def _reconcile(cluster: list[NodeView]) -> tuple[list[dict] | None, list[str] | None]:
-    """Return (chosen_ref | None, conflict_codes | None). Conflict ⇒ chosen_ref is None."""
-    mkn = [r for n in cluster for r in _mkn_refs(n.concept_ref)]
-    if not mkn:
-        # no MKN-10 code — keep the first non-empty concept_ref (e.g. a drug ref), no conflict possible
-        for n in cluster:
-            if n.concept_ref:
-                return n.concept_ref, None
+    """Return (chosen_ref | None, conflict_codes | None). Conflict ⇒ chosen_ref is None, cluster skipped.
+
+    Conflict when the casing-twins disagree on identity: MKN codes span >1 3-char family, OR >1 distinct
+    drug concept-id, OR a mix of disease (MKN) and drug on the same name. Otherwise pick the survivor's ref:
+    the most-specific MKN code (`N18.9` over `N18`), else the sole drug ref.
+    """
+    refs = [r for n in cluster for r in (n.concept_ref or []) if r.get("code")]
+    if not refs:
         return None, None
-    dotset = {_dotnorm(r.get("code", "")) for r in mkn}
-    families = {c[:3] for c in dotset}
-    if len(families) > 1:
-        return None, sorted(dotset)  # genuinely different families → conflict
-    # one family (identical modulo dots, or category⊃specific) → keep the most-specific
-    return [_pick_most_specific(mkn)], None
+    mkn = [r for r in refs if not _is_drug(r)]
+    drug_ids = {r["code"] for r in refs if _is_drug(r)}
+    mkn_families = {_dotnorm(r["code"])[:3] for r in mkn}
+    if len(mkn_families) > 1 or len(drug_ids) > 1 or (mkn and drug_ids):
+        codes = {_dotnorm(r["code"]) for r in mkn} | drug_ids
+        return None, sorted(codes)
+    if mkn:
+        return [_pick_most_specific(mkn)], None
+    # sole drug id — return one representative drug ref
+    return [next(r for r in refs if _is_drug(r))], None
 
 
 def _specificity(node: NodeView) -> int:

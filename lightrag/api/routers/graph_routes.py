@@ -780,7 +780,14 @@ def create_graph_routes(rag, api_key: Optional[str] = None):
         merged = failed = 0
         for m in plan.merges:
             try:
-                await rag.amerge_entities(source_entities=m.sources, target_entity=m.survivor)
+                # amerge_entities merges concept_ref with keep_first over [sources…, target], so the
+                # survivor would inherit a SOURCE's ref, not the reconciled most-specific one — stamp it.
+                target_data = {"concept_ref": json.dumps(m.ref, ensure_ascii=False)} if m.ref else None
+                await rag.amerge_entities(
+                    source_entities=m.sources,
+                    target_entity=m.survivor,
+                    target_entity_data=target_data,
+                )
                 merged += 1
             except Exception as e:  # noqa: BLE001 — one bad cluster must not abort the pass
                 failed += 1
@@ -816,6 +823,14 @@ def create_graph_routes(rag, api_key: Optional[str] = None):
                 ]
                 return summary
             await check_pipeline_busy_or_raise(rag)  # do not dedup mid-ingest
+            if _DEDUP_STATUS_PATH.exists():
+                try:
+                    if json.loads(_DEDUP_STATUS_PATH.read_text(encoding="utf-8")).get("state") == "running":
+                        raise HTTPException(status_code=409, detail="a dedup apply run is already in progress")
+                except HTTPException:
+                    raise
+                except Exception:  # noqa: BLE001 — unreadable status ⇒ treat as not-running
+                    pass
             background_tasks.add_task(_run_dedup, plan)
             return {"status": "started", "status_url": "/graph:dedup/status", **summary}
         except HTTPException:
