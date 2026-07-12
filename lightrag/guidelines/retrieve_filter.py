@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Iterable
 
-GRAPH_SEP = "<SEP>"
+from lightrag.constants import GRAPH_FIELD_SEP  # the canonical source_id separator ("<SEP>")
 
 # facet enum, checked in this precedence (first keyword hit wins)
 _FACET_RULES: list[tuple[str, tuple[str, ...]]] = [
@@ -49,7 +49,7 @@ def build_code_index(entities: Iterable[tuple]) -> dict[str, set[str]]:
     Returns ``dot-normalized MKN-10 code -> {chunk_id}`` (drug `c_…` refs skipped)."""
     index: dict[str, set[str]] = {}
     for refs, source_id in entities:
-        chunks = {c for c in (source_id or "").replace(GRAPH_SEP, "\n").split("\n") if c.strip()}
+        chunks = {c for c in (source_id or "").replace(GRAPH_FIELD_SEP, "\n").split("\n") if c.strip()}
         if not chunks:
             continue
         for r in refs or []:

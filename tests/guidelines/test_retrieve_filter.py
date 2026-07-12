@@ -31,6 +31,15 @@ def test_code_matches_short_codes_exact_only():
     assert not code_matches("I1", "I10")  # too short to prefix-match
 
 
+def test_code_matches_multi_level_depth_and_boundary():
+    # a request deeper than the entity by >1 level still pulls the category (category ⊃ specific)
+    assert code_matches("I10", "I10.90")  # entity I10, request I10.90 → same family
+    assert code_matches("E11.9", "E11.92")  # both under E11
+    # but never across the 3-char family boundary
+    assert not code_matches("I10", "I209")
+    assert not code_matches("T36", "T50")
+
+
 def test_build_index_splits_source_ids_and_skips_drugs():
     entities = [
         ([_mkn("I10")], "c1<SEP>c2"),

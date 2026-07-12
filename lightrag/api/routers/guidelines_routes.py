@@ -207,16 +207,26 @@ def create_guidelines_routes(rag, api_key: Optional[str] = None):
         try:
             code = request.concept_ref.mkn10_code if request.concept_ref else None
             allow: Optional[set] = None
+            code_active = False  # the concept_ref chunk filter is applied only when it resolves to ≥1 chunk
             if code:
                 try:
-                    allow = chunks_for_code(await _get_code_index(), code) or None
+                    hit = chunks_for_code(await _get_code_index(), code)
+                    if hit:
+                        allow, code_active = hit, True
+                    else:
+                        # code requested but no in-scope chunks (unknown code or ungrounded) → skip the
+                        # code filter (resilience); facet may still apply.
+                        logger.info(f"retrieve: concept_ref {code!r} resolved to 0 chunks; code filter skipped")
                 except Exception as e:  # noqa: BLE001 — index unavailable ⇒ plain retrieval, no error
                     logger.warning(f"retrieve: concept_ref index unavailable, plain retrieval: {e}")
-                    allow = None
 
-            want_filter = allow is not None or bool(request.facet)
-            # A concept_ref filter narrows a wide pool; widen retrieval so enough in-scope chunks survive.
-            pool = max(request.top_k * 6, 60) if want_filter else request.top_k
+            facet_active = bool(request.facet)
+            want_filter = code_active or facet_active
+            # A code filter narrows a query-ranked pool; widen it so enough in-scope chunks survive the
+            # post-filter. NOTE: a code with more in-scope chunks than the pool can still under-return if
+            # the query ranks out-of-scope chunks above them (an id-level vector filter would be exact but
+            # needs an engine change — out of scope). Tune via the multiplier/floor.
+            pool = max(request.top_k * 8, 80) if want_filter else request.top_k
             param = QueryParam(
                 mode=request.mode, top_k=pool, chunk_top_k=pool, only_need_context=True
             )
@@ -231,7 +241,7 @@ def create_guidelines_routes(rag, api_key: Optional[str] = None):
                     if not content:
                         continue
                     chunk_id = chunk.get("chunk_id", "")
-                    if apply_filter and allow is not None and chunk_id not in allow:
+                    if apply_filter and code_active and chunk_id not in allow:
                         continue
                     file_path = chunk.get("file_path", "unknown_source")
                     prov = (
@@ -241,7 +251,7 @@ def create_guidelines_routes(rag, api_key: Optional[str] = None):
                         or {}
                     )
                     facet = classify_facet(prov.get("section"))
-                    if apply_filter and not facet_matches(facet, request.facet):
+                    if apply_filter and facet_active and not facet_matches(facet, request.facet):
                         continue
                     out.append(
                         RetrievedPassage(
@@ -249,7 +259,8 @@ def create_guidelines_routes(rag, api_key: Optional[str] = None):
                             citation=f"{file_path}#chunk={chunk_id}@{_edition_from_filename(file_path)}",
                             score=chunk.get("score"),
                             facet=facet,
-                            concept_ref=request.concept_ref if (apply_filter and allow is not None) else None,
+                            # stamp the code ref only when the chunk actually passed the code gate
+                            concept_ref=request.concept_ref if (apply_filter and code_active) else None,
                             **build_passage_links(chunk_id, file_path, prov),
                         )
                     )
@@ -258,7 +269,7 @@ def create_guidelines_routes(rag, api_key: Optional[str] = None):
                 return out
 
             passages = await _build(apply_filter=want_filter)
-            filtered = want_filter and bool(passages)
+            filtered = want_filter and bool(passages)  # honest: a filter dimension was active AND non-empty
             if want_filter and not passages:
                 # focus emptied the result → graceful fallback to plain retrieval (no regression)
                 passages = await _build(apply_filter=False)
