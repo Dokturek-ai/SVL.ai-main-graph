@@ -93,12 +93,19 @@ def _reconcile(cluster: list[NodeView]) -> tuple[list[dict] | None, list[str] | 
     return [_pick_most_specific(mkn)], None
 
 
+def _specificity(node: NodeView) -> int:
+    """Length of the node's most-specific dot-normalized MKN-10 code (0 if none) — N18.9→4 beats N18→3."""
+    return max((len(_dotnorm(r.get("code", ""))) for r in _mkn_refs(node.concept_ref)), default=0)
+
+
 def _survivor(cluster: list[NodeView]) -> str:
-    """Exactly-one-grounded → that node; else highest degree; else lexicographically-first (deterministic)."""
+    """Survivor must stay GROUNDED whenever any node is (else amerge_entities, which does not carry
+    concept_ref, would drop the code). Among the grounded pool pick the most-specific code, then highest
+    degree, then lexicographically-first; if nothing is grounded, highest degree then lexmin.
+    """
     grounded = [n for n in cluster if n.concept_ref]
-    if len(grounded) == 1:
-        return grounded[0].name
-    return sorted(cluster, key=lambda n: (-n.degree, n.name))[0].name
+    pool = grounded if grounded else cluster
+    return sorted(pool, key=lambda n: (-_specificity(n), -n.degree, n.name))[0].name
 
 
 def plan_dedup(nodes: list[NodeView]) -> DedupPlan:

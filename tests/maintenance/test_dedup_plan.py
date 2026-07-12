@@ -92,6 +92,20 @@ def test_pregnancy_poison_pair_is_flagged_as_conflict():
     assert plan.conflicts[0].codes == ["I10", "O100"]
 
 
+def test_survivor_stays_grounded_even_when_an_ungrounded_twin_has_higher_degree():
+    # a high-degree UNGROUNDED casing-twin must NOT win survivor — amerge_entities doesn't carry
+    # concept_ref, so an ungrounded survivor would drop the code. Grounded (most-specific) wins.
+    nodes = [
+        NodeView("Chronické Onemocnění Ledvin", degree=99),  # ungrounded, highest degree
+        NodeView("Chronické onemocnění ledvin", concept_ref=_mkn("N18"), degree=3),
+        NodeView("chronické onemocnění ledvin", concept_ref=_mkn("N18.9"), degree=1),
+    ]
+    plan = plan_dedup(nodes)
+    assert len(plan.merges) == 1
+    assert plan.merges[0].survivor == "chronické onemocnění ledvin"  # grounded, most-specific N18.9
+    assert "Chronické Onemocnění Ledvin" in plan.merges[0].sources
+
+
 def test_drug_concept_ids_do_not_cause_a_conflict():
     # two casing-twins grounded to different c_… drug concept-ids must not be read as an MKN-10 conflict
     ref_a = [{"code": "c_aaa", "system": "http://www.whocc.no/atc"}]
