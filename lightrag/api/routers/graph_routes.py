@@ -13,8 +13,10 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Query, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
 from lightrag.base import DeletionResult
+import unicodedata
+
 from lightrag.maintenance.dedup import NodeView, plan_dedup
-from lightrag.maintenance.edition_rename import plan_rename
+from lightrag.maintenance.edition_rename import EDITION_YEARS, _new_name, plan_rename
 from lightrag.utils import logger
 from ..utils_api import get_combined_auth_dependency
 from .document_routes import check_pipeline_busy_or_raise
@@ -913,28 +915,41 @@ def create_graph_routes(rag, api_key: Optional[str] = None):
 
         chunk_tables = await _existing(_RENAME_CHUNK_TABLES)
         substr_tables = await _existing(_RENAME_SUBSTR_TABLES)
-        total = len(plan.to_rename)
-        _write({"state": "running", "renamed": 0, "total": total, "tables": chunk_tables + substr_tables})
-        renamed = failed = 0
+
+        # concrete work items: BOTH unicode normalizations of every known (old -> new). Stores disagree
+        # on NFC vs NFD (PG is NFD from the macOS-decomposed ingest; some Neo4j nodes are NFC), so a
+        # single-form match misses the other. Every op is idempotent (no-op when the substring is absent),
+        # so sweeping all variants also mops up residue a prior single-form run left in a store whose
+        # doc_status is already renamed (the doc_status-sourced plan would otherwise report nothing to do).
+        work: set[tuple[str, str]] = set()
+        for old_nfc, year in EDITION_YEARS.items():
+            new_nfc = _new_name(old_nfc, year)
+            for norm in ("NFC", "NFD"):
+                work.add((unicodedata.normalize(norm, old_nfc), unicodedata.normalize(norm, new_nfc)))
+        work.update(plan.to_rename)  # stored spellings the plan matched, in case of an unforeseen form
+
+        total = len(work)
+        _write({"state": "running", "processed": 0, "total": total, "tables": chunk_tables + substr_tables})
+        processed = failed = 0
+        label = graph._get_workspace_label()
         # every UPDATE uses the SAME param dict {old, new, ws} → $1=old, $2=new, $3=ws — one convention
         # across whole-value and substring so a copy-edit can't silently swap old↔new.
-        for old, new in plan.to_rename:
+        for old, new in work:
             try:
-                # 1. chunk-level whole-value (load-bearing: edition ordering reads these)
+                # PG chunk-level whole-value (load-bearing: edition ordering reads these)
                 for tbl in chunk_tables:
                     await db.execute(
                         f"UPDATE {tbl} SET file_path=$2 WHERE file_path=$1 AND workspace=$3",
                         {"old": old, "new": new, "ws": ws},
                     )
-                # 2. PG substring (provenance: `<SEP>`-joined; strpos avoids `_` being a LIKE wildcard)
+                # PG substring (provenance: `<SEP>`-joined; strpos avoids `_` being a LIKE wildcard)
                 for tbl in substr_tables:
                     await db.execute(
                         f"UPDATE {tbl} SET file_path=REPLACE(file_path,$1,$2) "
                         f"WHERE strpos(file_path,$1)>0 AND workspace=$3",
                         {"old": old, "new": new, "ws": ws},
                     )
-                # 3. Neo4j node + relationship file_path (scoped to the workspace label)
-                label = graph._get_workspace_label()
+                # Neo4j node + relationship file_path (scoped to the workspace label)
                 async with graph._driver.session(database=graph._DATABASE) as session:
                     await session.run(
                         f"MATCH (n:`{label}`) WHERE n.file_path CONTAINS $old "
@@ -948,19 +963,18 @@ def create_graph_routes(rag, api_key: Optional[str] = None):
                         old=old,
                         new=new,
                     )
-                # 4. DOC_STATUS LAST — plan source; a partial failure above leaves `_unknown` here so the
-                #    next run re-plans this doc and the idempotent ops complete it (no cross-store txn).
+                # DOC_STATUS (the doc listing / plan source)
                 await db.execute(
                     "UPDATE LIGHTRAG_DOC_STATUS SET file_path=$2 WHERE file_path=$1 AND workspace=$3",
                     {"old": old, "new": new, "ws": ws},
                 )
-                renamed += 1
-            except Exception as e:  # noqa: BLE001 — one bad doc must not abort the pass
+                processed += 1
+            except Exception as e:  # noqa: BLE001 — one bad variant must not abort the pass
                 failed += 1
                 logger.warning(f"rename-edition: '{old}' -> '{new}' failed: {e}")
-            _write({"state": "running", "renamed": renamed, "failed": failed, "total": total})
-        _write({"state": "done", "renamed": renamed, "failed": failed, "total": total})
-        logger.info(f"rename-edition: done — renamed={renamed} failed={failed} total={total}")
+            _write({"state": "running", "processed": processed, "failed": failed, "total": total})
+        _write({"state": "done", "processed": processed, "failed": failed, "total": total})
+        logger.info(f"rename-edition: done — processed={processed} failed={failed} total={total}")
 
     @router.post("/graph:rename-edition", dependencies=[Depends(combined_auth)])
     async def graph_rename_edition(background_tasks: BackgroundTasks, apply: bool = Query(False)):
@@ -977,8 +991,9 @@ def create_graph_routes(rag, api_key: Optional[str] = None):
             if not apply:
                 summary["dry_run"] = True
                 return summary
-            if plan.count == 0:
-                return {"status": "noop", **summary}
+            # apply always runs the full variant sweep (not gated on plan.count): a doc can be renamed in
+            # doc_status yet still carry `_unknown` in another store (Neo4j NFC nodes), which the sweep
+            # cleans. Idempotent, so a truly-clean store just performs no-op UPDATEs.
             await check_pipeline_busy_or_raise(rag)  # do not rename mid-ingest
             _RENAME_STALE_S = float(os.getenv("DEDUP_STALE_SECONDS", "600"))
             if _RENAME_STATUS_PATH.exists():
