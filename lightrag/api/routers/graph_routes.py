@@ -865,10 +865,12 @@ def create_graph_routes(rag, api_key: Optional[str] = None):
         os.getenv("DEDUP_STATUS_DIR", "/app/data/maintenance")
     ) / "rename-edition-status.json"
 
-    # file_path persistence sites (postgres_impl DDL). Whole-value = single-valued per row and
-    # load-bearing (the chunk registry + chat references read these → edition ordering). Substring =
-    # `<SEP>`-joined + capped provenance (source chips), display-only, best-effort.
-    _RENAME_WHOLE_TABLES = ("LIGHTRAG_DOC_STATUS", "LIGHTRAG_DOC_CHUNKS", "LIGHTRAG_VDB_CHUNKS")
+    # file_path persistence sites (postgres_impl DDL). Chunk tables = single-valued + load-bearing (the
+    # chunk registry + chat references read these → edition ordering). Substring = `<SEP>`-joined + capped
+    # provenance (source chips), display-only, best-effort. LIGHTRAG_DOC_STATUS is handled LAST, on its own
+    # (see _run_rename): it is the plan source, so leaving it until every other store is renamed means a
+    # partial failure re-plans the doc on the next run and the idempotent ops safely finish it.
+    _RENAME_CHUNK_TABLES = ("LIGHTRAG_DOC_CHUNKS", "LIGHTRAG_VDB_CHUNKS")
     _RENAME_SUBSTR_TABLES = ("LIGHTRAG_VDB_ENTITY", "LIGHTRAG_VDB_RELATION")
 
     async def _live_doc_file_paths():
@@ -898,22 +900,24 @@ def create_graph_routes(rag, api_key: Optional[str] = None):
         total = len(plan.to_rename)
         _write({"state": "running", "renamed": 0, "total": total})
         renamed = failed = 0
+        # every UPDATE uses the SAME param dict {old, new, ws} → $1=old, $2=new, $3=ws — one convention
+        # across whole-value and substring so a copy-edit can't silently swap old↔new.
         for old, new in plan.to_rename:
             try:
-                # PG whole-value (load-bearing: edition ordering reads these)
-                for tbl in _RENAME_WHOLE_TABLES:
+                # 1. chunk-level whole-value (load-bearing: edition ordering reads these)
+                for tbl in _RENAME_CHUNK_TABLES:
                     await db.execute(
-                        f"UPDATE {tbl} SET file_path=$1 WHERE file_path=$2 AND workspace=$3",
-                        {"new": new, "old": old, "ws": ws},
+                        f"UPDATE {tbl} SET file_path=$2 WHERE file_path=$1 AND workspace=$3",
+                        {"old": old, "new": new, "ws": ws},
                     )
-                # PG substring (provenance: `<SEP>`-joined; strpos avoids `_` being a LIKE wildcard)
+                # 2. PG substring (provenance: `<SEP>`-joined; strpos avoids `_` being a LIKE wildcard)
                 for tbl in _RENAME_SUBSTR_TABLES:
                     await db.execute(
                         f"UPDATE {tbl} SET file_path=REPLACE(file_path,$1,$2) "
                         f"WHERE strpos(file_path,$1)>0 AND workspace=$3",
                         {"old": old, "new": new, "ws": ws},
                     )
-                # Neo4j node + relationship file_path (scoped to the workspace label)
+                # 3. Neo4j node + relationship file_path (scoped to the workspace label)
                 label = graph._get_workspace_label()
                 async with graph._driver.session(database=graph._DATABASE) as session:
                     await session.run(
@@ -928,6 +932,12 @@ def create_graph_routes(rag, api_key: Optional[str] = None):
                         old=old,
                         new=new,
                     )
+                # 4. DOC_STATUS LAST — plan source; a partial failure above leaves `_unknown` here so the
+                #    next run re-plans this doc and the idempotent ops complete it (no cross-store txn).
+                await db.execute(
+                    "UPDATE LIGHTRAG_DOC_STATUS SET file_path=$2 WHERE file_path=$1 AND workspace=$3",
+                    {"old": old, "new": new, "ws": ws},
+                )
                 renamed += 1
             except Exception as e:  # noqa: BLE001 — one bad doc must not abort the pass
                 failed += 1

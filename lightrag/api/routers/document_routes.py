@@ -1834,10 +1834,21 @@ def _resolve_and_rename_edition(file_path: Path) -> Path:
         stem = file_path.stem
         if stem.endswith("_unknown"):
             stem = stem[: -len("_unknown")]
+        # trim trailing separators so the year appends to a clean stem — otherwise a work_id like
+        # "Bolesti hlavy " (trailing space) mismatches its "Bolesti hlavy_2023" sibling and splits editions.
+        stem = stem.rstrip(" _-")
         new_path = file_path.with_name(f"{stem}_{year}{file_path.suffix}")
-        if new_path == file_path or new_path.exists():
+        if new_path == file_path:
             return file_path
-        file_path.rename(new_path)
+        if new_path.exists():
+            return new_path  # already renamed (prior run / concurrent ingest) — use the resolved name
+        try:
+            file_path.rename(new_path)
+        except OSError:
+            # lost the rename race (source moved by a concurrent ingest) → use the resolved name if present
+            if new_path.exists():
+                return new_path
+            raise
         logger.info(f"edition-resolve: {file_path.name} -> {new_path.name} (via {source})")
         return new_path
     except Exception as e:  # noqa: BLE001 — resolution/rename must never break ingest
