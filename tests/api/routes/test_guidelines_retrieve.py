@@ -172,6 +172,27 @@ def test_concept_ref_filters_to_the_code_chunks():
     assert data["passages"][0]["concept_ref"] == {"mkn10_code": "I10", "cui": None}
 
 
+def test_retrieve_reads_the_chunk_tags_artifact(tmp_path, monkeypatch):
+    # spec 015: with a chunk-tags.jsonl present, the index is loaded from the ARTIFACT (no graph).
+    # StubRag has NO graph_nodes → if it wrongly fell back to the graph, the index would be empty.
+    (tmp_path / "chunk-tags.jsonl").write_text(
+        json.dumps({"chunk_id": "c1", "concept_ref": [{"code": "I10", "system": MKN}]}) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(_guidelines_routes, "_CHUNK_TAGS_DIR", str(tmp_path))
+    chunks = [_chunk("a", "Foo_2024.md", "c1"), _chunk("b", "Foo_2024.md", "c2")]
+    rag = StubRag(chunks)  # no graph_nodes
+    app = FastAPI()
+    app.include_router(create_guidelines_routes(rag, api_key=None))
+    data = TestClient(app).post(
+        "/v1/guidelines:retrieve",
+        json={"query": "dotaz na hypertenzi", "top_k": 5, "concept_ref": {"mkn10_code": "I10"}},
+    ).json()
+    assert data["filtered"] is True  # scoped from the artifact
+    cids = {c["citation"] for c in data["passages"]}
+    assert any("chunk=c1" in c for c in cids) and not any("chunk=c2" in c for c in cids)
+
+
 def test_unresolvable_code_falls_back_to_plain_retrieval():
     chunks = [_chunk("a", "Foo_2024.md", "c1")]
     nodes = [_Node("Hypertenze", [{"code": "I10", "system": MKN}], "c1")]
