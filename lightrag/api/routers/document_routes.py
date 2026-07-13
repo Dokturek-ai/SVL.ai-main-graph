@@ -48,6 +48,7 @@ from lightrag.utils import (
     generate_track_id,
     move_file_to_parsed_dir,
 )
+from lightrag.promotion.edition_resolve import resolve_edition_year
 from lightrag.api.utils_api import get_combined_auth_dependency
 from ..config import global_args
 
@@ -1818,6 +1819,32 @@ def _extract_xlsx(file_bytes: bytes) -> str:
     return "\n".join(content_parts)
 
 
+def _resolve_and_rename_edition(file_path: Path) -> Path:
+    """Durable edition-year resolution (spec 016): if a PDF's filename has no year but one is
+    recoverable from the title page / CreationDate, rename the on-disk file to ``<work>_<year>.pdf``
+    so the stored file_path carries the edition and `_unknown` is never persisted when knowable.
+    Any failure (unresolvable, rename error) is non-fatal — ingest proceeds with the original name."""
+    try:
+        resolved = resolve_edition_year(file_path)
+        if not resolved:
+            return file_path
+        year, source = resolved
+        if source == "filename":
+            return file_path  # already carries a year
+        stem = file_path.stem
+        if stem.endswith("_unknown"):
+            stem = stem[: -len("_unknown")]
+        new_path = file_path.with_name(f"{stem}_{year}{file_path.suffix}")
+        if new_path == file_path or new_path.exists():
+            return file_path
+        file_path.rename(new_path)
+        logger.info(f"edition-resolve: {file_path.name} -> {new_path.name} (via {source})")
+        return new_path
+    except Exception as e:  # noqa: BLE001 — resolution/rename must never break ingest
+        logger.warning(f"edition-resolve: skipped {file_path.name}: {e}")
+        return file_path
+
+
 async def pipeline_enqueue_file(
     rag: LightRAG,
     file_path: Path,
@@ -1845,6 +1872,8 @@ async def pipeline_enqueue_file(
     try:
         content = ""
         ext = file_path.suffix.lower()
+        if ext == ".pdf":
+            file_path = _resolve_and_rename_edition(file_path)
         file_size = 0
 
         # Get file size for error reporting
