@@ -1,6 +1,11 @@
 import pytest
 
-from lightrag.guidelines.chunk_tags import build_chunk_tags, chunk_has_code
+from lightrag.guidelines.chunk_tags import (
+    build_chunk_tags,
+    chunk_has_code,
+    load_code_index,
+    write_chunk_tags,
+)
 
 pytestmark = pytest.mark.offline
 
@@ -55,3 +60,13 @@ def test_chunk_has_code_family_match():
     assert chunk_has_code(tag, "I10")  # family match on the dotted/dotless MKN code
     assert not chunk_has_code(tag, "I11")
     assert not chunk_has_code({"concept_ref": None}, "I10")
+
+
+def test_write_then_load_code_index_round_trip(tmp_path):
+    entities = [([_mkn("I10")], "c1<SEP>c2"), ([_mkn("E11.9")], "c2"), ([], "c3")]
+    tags = build_chunk_tags(entities)
+    manifest = write_chunk_tags(tags, tmp_path)
+    assert manifest["chunk_count"] == 2  # c1, c2 (c3 had no ref)
+    idx = load_code_index(tmp_path)  # dot-normalized code -> {chunk_id}
+    assert idx["I10"] == {"c1", "c2"}
+    assert idx["E119"] == {"c2"}

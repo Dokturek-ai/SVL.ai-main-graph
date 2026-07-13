@@ -10,11 +10,13 @@ per-request ``get_knowledge_graph``) and lets the A-harvest reify the refs into 
 
 from __future__ import annotations
 
+import json
 from collections import defaultdict
+from pathlib import Path
 from typing import Iterable
 
 from lightrag.constants import GRAPH_FIELD_SEP
-from lightrag.guidelines.retrieve_filter import classify_facet, code_matches
+from lightrag.guidelines.retrieve_filter import classify_facet, code_matches, dotnorm
 
 
 def build_chunk_tags(
@@ -61,3 +63,40 @@ def chunk_has_code(tag: dict, request_code: str) -> bool:
         if code_matches(r.get("code", ""), request_code):
             return True
     return False
+
+
+def write_chunk_tags(tags: dict[str, dict], out_dir: str | Path) -> dict:
+    """Write the ``chunk-tags.jsonl`` artifact (one ``{chunk_id, concept_ref}`` per code-tagged chunk) +
+    a manifest. Only chunks WITH a concept_ref are written (the join layer); returns the manifest."""
+    d = Path(out_dir)
+    d.mkdir(parents=True, exist_ok=True)
+    n_chunks = codes = 0
+    with (d / "chunk-tags.jsonl").open("w", encoding="utf-8") as f:
+        for chunk_id, tag in sorted(tags.items()):
+            refs = tag.get("concept_ref")
+            if not refs:
+                continue
+            f.write(json.dumps({"chunk_id": chunk_id, "concept_ref": refs}, ensure_ascii=False) + "\n")
+            n_chunks += 1
+            codes += len(refs)
+    manifest = {"chunk_count": n_chunks, "ref_count": codes}
+    (d / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    return manifest
+
+
+def load_code_index(artifact_dir: str | Path) -> dict[str, set[str]]:
+    """Load ``chunk-tags.jsonl`` and INVERT it into the ``dot-normalized code -> {chunk_id}`` map that
+    ``retrieve_filter.chunks_for_code`` consumes (the same shape as ``build_code_index``, artifact-sourced)."""
+    p = Path(artifact_dir) / "chunk-tags.jsonl"
+    index: dict[str, set[str]] = defaultdict(set)
+    with p.open(encoding="utf-8") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            rec = json.loads(line)
+            cid = rec.get("chunk_id")
+            for r in rec.get("concept_ref") or []:
+                code = dotnorm(r.get("code") or "")
+                if cid and len(code) >= 3:
+                    index[code].add(cid)
+    return index

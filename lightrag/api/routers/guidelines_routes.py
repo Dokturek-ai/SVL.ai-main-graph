@@ -41,10 +41,17 @@ from lightrag.guidelines.retrieve_filter import (
     classify_facet,
     facet_matches,
 )
+from lightrag.guidelines.chunk_tags import (
+    build_chunk_tags,
+    load_code_index,
+    write_chunk_tags,
+)
 from lightrag.utils import logger
 
 # Where the promotion pass writes the immutable bundle (data volume so it survives a redeploy).
 _BUNDLE_DIR = os.getenv("PROMOTION_BUNDLE_DIR", "/app/data/promotion/bundle")
+# Where the chunk-tag backfill writes chunk-tags.jsonl (spec 015) — retrieve reads it instead of the graph.
+_CHUNK_TAGS_DIR = os.getenv("CHUNK_TAGS_DIR", "/app/data/chunk-tags")
 
 # Corpus filenames encode the edition as `Work_YEAR.md` (e.g. `Arteriální hypertenze_2024.md`).
 # The year is bounded by a separator (`.`/`_`/path `/`) or end-of-string so a longer digit run
@@ -163,11 +170,27 @@ def create_guidelines_routes(rag, api_key: Optional[str] = None):
 
     combined_auth = get_combined_auth_dependency(api_key)
 
-    # --- concept_ref → chunks index (spec 014): entities carry concept_ref + source_id; cache the
-    # code→chunks map (rebuilt on TTL — the graph changes only on re-ground/dedup). ---
+    # --- concept_ref → chunks index (spec 014/015): TTL-cached code→chunks map. Preferred source is the
+    # persisted chunk-tags.jsonl artifact (spec 015 — a file read, no graph contention); falls back to
+    # building from the live graph when the artifact is absent (backfill not yet run). ---
     _code_index: dict = {"at": 0.0, "map": {}}
     _index_lock = asyncio.Lock()
     _INDEX_TTL = float(os.getenv("RETRIEVE_INDEX_TTL", "600"))
+
+    async def _build_index_from_graph() -> dict:
+        kg = await rag.get_knowledge_graph(node_label="*", max_depth=1, max_nodes=1_000_000)
+        entities = []
+        for n in getattr(kg, "nodes", []) or []:
+            p = getattr(n, "properties", None) or {}
+            raw = p.get("concept_ref")
+            if not raw:
+                continue
+            try:
+                refs = json.loads(raw) if isinstance(raw, str) else raw
+            except Exception:  # noqa: BLE001
+                continue
+            entities.append((refs, p.get("source_id")))
+        return build_code_index(entities)
 
     async def _get_code_index() -> dict:
         now = time.monotonic()
@@ -177,19 +200,15 @@ def create_guidelines_routes(rag, api_key: Optional[str] = None):
             now = time.monotonic()
             if _code_index["map"] and now - _code_index["at"] < _INDEX_TTL:
                 return _code_index["map"]
-            kg = await rag.get_knowledge_graph(node_label="*", max_depth=1, max_nodes=1_000_000)
-            entities = []
-            for n in getattr(kg, "nodes", []) or []:
-                p = getattr(n, "properties", None) or {}
-                raw = p.get("concept_ref")
-                if not raw:
-                    continue
+            # spec 015: prefer the persisted artifact (no per-request graph read / mutation contention)
+            if (Path(_CHUNK_TAGS_DIR) / "chunk-tags.jsonl").exists():
                 try:
-                    refs = json.loads(raw) if isinstance(raw, str) else raw
-                except Exception:  # noqa: BLE001
-                    continue
-                entities.append((refs, p.get("source_id")))
-            _code_index["map"] = build_code_index(entities)
+                    _code_index["map"] = load_code_index(_CHUNK_TAGS_DIR)
+                except Exception as e:  # noqa: BLE001 — unreadable artifact ⇒ fall back to the graph
+                    logger.warning(f"retrieve: chunk-tags artifact unreadable, falling back to graph: {e}")
+                    _code_index["map"] = await _build_index_from_graph()
+            else:
+                _code_index["map"] = await _build_index_from_graph()
             _code_index["at"] = time.monotonic()
             return _code_index["map"]
 
@@ -283,6 +302,72 @@ def create_guidelines_routes(rag, api_key: Optional[str] = None):
         except Exception as e:
             logger.error(f"Error in guidelines:retrieve: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail=str(e))
+
+    # --- chunk-tag backfill (spec 015): propagate the grounded entity concept_ref onto chunks and emit
+    # chunk-tags.jsonl (the durable code→chunk join layer retrieve + the A-harvest read). ---
+    _TAG_STATUS_PATH = Path(_CHUNK_TAGS_DIR) / "status.json"
+
+    async def _chunk_tag_plan() -> dict:
+        """Pull the (quiet) graph → propagate entity concept_ref onto chunks (pure build_chunk_tags)."""
+        kg = await rag.get_knowledge_graph(node_label="*", max_depth=1, max_nodes=1_000_000)
+        entities = []
+        for n in getattr(kg, "nodes", []) or []:
+            p = getattr(n, "properties", None) or {}
+            raw = p.get("concept_ref")
+            if not raw:
+                continue
+            try:
+                refs = json.loads(raw) if isinstance(raw, str) else raw
+            except Exception:  # noqa: BLE001
+                continue
+            entities.append((refs, p.get("source_id")))
+        return build_chunk_tags(entities)
+
+    @router.post("/v1/guidelines:tag-chunks", dependencies=[Depends(combined_auth)])
+    async def guidelines_tag_chunks(background_tasks: BackgroundTasks, apply: bool = Query(False)):
+        """Backfill chunk concept_ref tags (spec 015). ``apply=false`` (default) = dry-run counts;
+        ``apply=true`` writes ``chunk-tags.jsonl`` in the background. Run on a QUIET graph."""
+        try:
+            tags = await _chunk_tag_plan()
+            tagged = {c: t for c, t in tags.items() if t.get("concept_ref")}
+            summary = {
+                "chunks_tagged": len(tagged),
+                "total_chunks_seen": len(tags),
+                "ref_total": sum(len(t["concept_ref"]) for t in tagged.values()),
+            }
+            if not apply:
+                return {"dry_run": True, **summary}
+
+            def _run():
+                _TAG_STATUS_PATH.parent.mkdir(parents=True, exist_ok=True)
+                _TAG_STATUS_PATH.write_text(json.dumps({"state": "running"}), encoding="utf-8")
+                try:
+                    manifest = write_chunk_tags(tags, _CHUNK_TAGS_DIR)
+                    _TAG_STATUS_PATH.write_text(
+                        json.dumps({"state": "done", **manifest}), encoding="utf-8"
+                    )
+                    logger.info(f"guidelines:tag-chunks done — {manifest}")
+                except Exception as e:  # noqa: BLE001
+                    _TAG_STATUS_PATH.write_text(
+                        json.dumps({"state": "failed", "error": str(e)}), encoding="utf-8"
+                    )
+                    logger.error(f"guidelines:tag-chunks failed: {e}", exc_info=True)
+
+            background_tasks.add_task(_run)
+            return {"status": "started", "status_url": "/v1/guidelines/tag-chunks/status", **summary}
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"guidelines:tag-chunks error: {str(e)}", exc_info=True)
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @router.get("/v1/guidelines/tag-chunks/status", dependencies=[Depends(combined_auth)])
+    async def guidelines_tag_chunks_status():
+        """State of the latest chunk-tag backfill (none/running/done/failed)."""
+        if not _TAG_STATUS_PATH.exists():
+            return {"state": "none"}
+        try:
+            return json.loads(_TAG_STATUS_PATH.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            return {"state": "unknown"}
 
     async def _run_promotion(out_dir: Path):
         """Harvest the live store → pure G1–G5 promote → write the immutable bundle.
