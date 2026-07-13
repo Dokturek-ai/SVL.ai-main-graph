@@ -4017,6 +4017,7 @@ async def kg_query(
         query_param.mode,
         query,
         query_param.response_type,
+        query_param.answer_mode,  # concise/verbose selects a different answer_style prompt
         query_param.top_k,
         query_param.chunk_top_k,
         query_param.max_entity_tokens,
@@ -5993,6 +5994,7 @@ async def naive_query(
         # via its keyword strings; naive has no keywords, so key on it directly.)
         retrieval_query,
         query_param.response_type,
+        query_param.answer_mode,  # concise/verbose selects a different answer_style prompt
         query_param.top_k,
         query_param.chunk_top_k,
         query_param.max_entity_tokens,
