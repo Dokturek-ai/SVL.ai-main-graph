@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from lightrag.base import DeletionResult
 from lightrag.maintenance.dedup import NodeView, plan_dedup
+from lightrag.maintenance.edition_rename import plan_rename
 from lightrag.utils import logger
 from ..utils_api import get_combined_auth_dependency
 from .document_routes import check_pipeline_busy_or_raise
@@ -856,6 +857,129 @@ def create_graph_routes(rag, api_key: Optional[str] = None):
             return {"state": "none"}
         try:
             return json.loads(_DEDUP_STATUS_PATH.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            return {"state": "unknown"}
+
+    # --- _unknown edition-year rename (spec 016) -------------------------------------------------
+    _RENAME_STATUS_PATH = Path(
+        os.getenv("DEDUP_STATUS_DIR", "/app/data/maintenance")
+    ) / "rename-edition-status.json"
+
+    # file_path persistence sites (postgres_impl DDL). Whole-value = single-valued per row and
+    # load-bearing (the chunk registry + chat references read these → edition ordering). Substring =
+    # `<SEP>`-joined + capped provenance (source chips), display-only, best-effort.
+    _RENAME_WHOLE_TABLES = ("LIGHTRAG_DOC_STATUS", "LIGHTRAG_DOC_CHUNKS", "LIGHTRAG_VDB_CHUNKS")
+    _RENAME_SUBSTR_TABLES = ("LIGHTRAG_VDB_ENTITY", "LIGHTRAG_VDB_RELATION")
+
+    async def _live_doc_file_paths():
+        """Distinct doc file_paths in the store (drives the dry-run plan)."""
+        db = rag.doc_status.db
+        ws = rag.doc_status.workspace
+        rows = await db.query(
+            "SELECT DISTINCT file_path FROM LIGHTRAG_DOC_STATUS "
+            "WHERE workspace=$1 AND file_path IS NOT NULL",
+            [ws],
+            multirows=True,
+        )
+        return [r["file_path"] for r in (rows or [])]
+
+    async def _run_rename(plan):
+        """Apply the file_path renames (background). Idempotent: a re-run plans 0."""
+        _RENAME_STATUS_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+        def _write(state: dict):
+            _RENAME_STATUS_PATH.write_text(
+                json.dumps({**state, "ts": time.time()}), encoding="utf-8"
+            )
+
+        db = rag.doc_status.db
+        ws = rag.doc_status.workspace
+        graph = rag.chunk_entity_relation_graph
+        total = len(plan.to_rename)
+        _write({"state": "running", "renamed": 0, "total": total})
+        renamed = failed = 0
+        for old, new in plan.to_rename:
+            try:
+                # PG whole-value (load-bearing: edition ordering reads these)
+                for tbl in _RENAME_WHOLE_TABLES:
+                    await db.execute(
+                        f"UPDATE {tbl} SET file_path=$1 WHERE file_path=$2 AND workspace=$3",
+                        {"new": new, "old": old, "ws": ws},
+                    )
+                # PG substring (provenance: `<SEP>`-joined; strpos avoids `_` being a LIKE wildcard)
+                for tbl in _RENAME_SUBSTR_TABLES:
+                    await db.execute(
+                        f"UPDATE {tbl} SET file_path=REPLACE(file_path,$1,$2) "
+                        f"WHERE strpos(file_path,$1)>0 AND workspace=$3",
+                        {"old": old, "new": new, "ws": ws},
+                    )
+                # Neo4j node + relationship file_path (scoped to the workspace label)
+                label = graph._get_workspace_label()
+                async with graph._driver.session(database=graph._DATABASE) as session:
+                    await session.run(
+                        f"MATCH (n:`{label}`) WHERE n.file_path CONTAINS $old "
+                        f"SET n.file_path = replace(n.file_path, $old, $new)",
+                        old=old,
+                        new=new,
+                    )
+                    await session.run(
+                        f"MATCH (:`{label}`)-[r]->() WHERE r.file_path CONTAINS $old "
+                        f"SET r.file_path = replace(r.file_path, $old, $new)",
+                        old=old,
+                        new=new,
+                    )
+                renamed += 1
+            except Exception as e:  # noqa: BLE001 — one bad doc must not abort the pass
+                failed += 1
+                logger.warning(f"rename-edition: '{old}' -> '{new}' failed: {e}")
+            _write({"state": "running", "renamed": renamed, "failed": failed, "total": total})
+        _write({"state": "done", "renamed": renamed, "failed": failed, "total": total})
+        logger.info(f"rename-edition: done — renamed={renamed} failed={failed} total={total}")
+
+    @router.post("/graph:rename-edition", dependencies=[Depends(combined_auth)])
+    async def graph_rename_edition(background_tasks: BackgroundTasks, apply: bool = Query(False)):
+        """Rename the spec-016 `_unknown` docs to their verified edition year (fix supersession-inversion).
+
+        ``apply=false`` (default) is a DRY-RUN: plan which docs rename vs are already done — no mutation.
+        ``apply=true`` runs the renames in the background (poll ``GET /graph:rename-edition/status``).
+        Idempotent: once a doc carries its `_<year>` name a re-run plans 0.
+        """
+        try:
+            live = await _live_doc_file_paths()
+            plan = plan_rename(live)
+            summary = plan.summary()
+            if not apply:
+                summary["dry_run"] = True
+                return summary
+            if plan.count == 0:
+                return {"status": "noop", **summary}
+            await check_pipeline_busy_or_raise(rag)  # do not rename mid-ingest
+            _RENAME_STALE_S = float(os.getenv("DEDUP_STALE_SECONDS", "600"))
+            if _RENAME_STATUS_PATH.exists():
+                try:
+                    st = json.loads(_RENAME_STATUS_PATH.read_text(encoding="utf-8"))
+                    if st.get("state") == "running" and (time.time() - float(st.get("ts", 0))) < _RENAME_STALE_S:
+                        raise HTTPException(status_code=409, detail="a rename-edition apply run is already in progress")
+                except HTTPException:
+                    raise
+                except Exception:  # noqa: BLE001 — unreadable status ⇒ treat as not-running
+                    pass
+            background_tasks.add_task(_run_rename, plan)
+            return {"status": "started", "status_url": "/graph:rename-edition/status", **summary}
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"graph:rename-edition error: {str(e)}")
+            logger.error(traceback.format_exc())
+            raise HTTPException(status_code=500, detail=f"graph:rename-edition error: {str(e)}")
+
+    @router.get("/graph:rename-edition/status", dependencies=[Depends(combined_auth)])
+    async def graph_rename_edition_status():
+        """State of the latest rename-edition apply run (none/running/done)."""
+        if not _RENAME_STATUS_PATH.exists():
+            return {"state": "none"}
+        try:
+            return json.loads(_RENAME_STATUS_PATH.read_text(encoding="utf-8"))
         except Exception:  # noqa: BLE001
             return {"state": "unknown"}
 
