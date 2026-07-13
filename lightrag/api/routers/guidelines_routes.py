@@ -305,7 +305,8 @@ def create_guidelines_routes(rag, api_key: Optional[str] = None):
 
     # --- chunk-tag backfill (spec 015): propagate the grounded entity concept_ref onto chunks and emit
     # chunk-tags.jsonl (the durable code→chunk join layer retrieve + the A-harvest read). ---
-    _TAG_STATUS_PATH = Path(_CHUNK_TAGS_DIR) / "status.json"
+    def _tag_status_path() -> Path:  # resolve _CHUNK_TAGS_DIR at call time (testable, env-override-safe)
+        return Path(_CHUNK_TAGS_DIR) / "status.json"
 
     async def _chunk_tag_plan() -> dict:
         """Pull the (quiet) graph → propagate entity concept_ref onto chunks (pure build_chunk_tags)."""
@@ -339,18 +340,16 @@ def create_guidelines_routes(rag, api_key: Optional[str] = None):
                 return {"dry_run": True, **summary}
 
             def _run():
-                _TAG_STATUS_PATH.parent.mkdir(parents=True, exist_ok=True)
-                _TAG_STATUS_PATH.write_text(json.dumps({"state": "running"}), encoding="utf-8")
+                sp = _tag_status_path()
+                sp.parent.mkdir(parents=True, exist_ok=True)
+                sp.write_text(json.dumps({"state": "running"}), encoding="utf-8")
                 try:
                     manifest = write_chunk_tags(tags, _CHUNK_TAGS_DIR)
-                    _TAG_STATUS_PATH.write_text(
-                        json.dumps({"state": "done", **manifest}), encoding="utf-8"
-                    )
+                    _code_index["at"] = 0.0  # invalidate the cached retrieve index → next call reloads the artifact
+                    sp.write_text(json.dumps({"state": "done", **manifest}), encoding="utf-8")
                     logger.info(f"guidelines:tag-chunks done — {manifest}")
                 except Exception as e:  # noqa: BLE001
-                    _TAG_STATUS_PATH.write_text(
-                        json.dumps({"state": "failed", "error": str(e)}), encoding="utf-8"
-                    )
+                    sp.write_text(json.dumps({"state": "failed", "error": str(e)}), encoding="utf-8")
                     logger.error(f"guidelines:tag-chunks failed: {e}", exc_info=True)
 
             background_tasks.add_task(_run)
@@ -362,10 +361,11 @@ def create_guidelines_routes(rag, api_key: Optional[str] = None):
     @router.get("/v1/guidelines/tag-chunks/status", dependencies=[Depends(combined_auth)])
     async def guidelines_tag_chunks_status():
         """State of the latest chunk-tag backfill (none/running/done/failed)."""
-        if not _TAG_STATUS_PATH.exists():
+        sp = _tag_status_path()
+        if not sp.exists():
             return {"state": "none"}
         try:
-            return json.loads(_TAG_STATUS_PATH.read_text(encoding="utf-8"))
+            return json.loads(sp.read_text(encoding="utf-8"))
         except Exception:  # noqa: BLE001
             return {"state": "unknown"}
 

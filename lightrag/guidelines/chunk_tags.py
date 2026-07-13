@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Iterable
 
 from lightrag.constants import GRAPH_FIELD_SEP
-from lightrag.guidelines.retrieve_filter import classify_facet, code_matches, dotnorm
+from lightrag.guidelines.retrieve_filter import _is_drug, classify_facet, code_matches, dotnorm
 
 
 def build_chunk_tags(
@@ -71,7 +71,9 @@ def write_chunk_tags(tags: dict[str, dict], out_dir: str | Path) -> dict:
     d = Path(out_dir)
     d.mkdir(parents=True, exist_ok=True)
     n_chunks = codes = 0
-    with (d / "chunk-tags.jsonl").open("w", encoding="utf-8") as f:
+    # write to a temp file then atomically rename, so a concurrent retrieve read never sees a torn file
+    tmp = d / "chunk-tags.jsonl.tmp"
+    with tmp.open("w", encoding="utf-8") as f:
         for chunk_id, tag in sorted(tags.items()):
             refs = tag.get("concept_ref")
             if not refs:
@@ -79,6 +81,7 @@ def write_chunk_tags(tags: dict[str, dict], out_dir: str | Path) -> dict:
             f.write(json.dumps({"chunk_id": chunk_id, "concept_ref": refs}, ensure_ascii=False) + "\n")
             n_chunks += 1
             codes += len(refs)
+    tmp.replace(d / "chunk-tags.jsonl")  # atomic
     manifest = {"chunk_count": n_chunks, "ref_count": codes}
     (d / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     return manifest
@@ -96,6 +99,8 @@ def load_code_index(artifact_dir: str | Path) -> dict[str, set[str]]:
             rec = json.loads(line)
             cid = rec.get("chunk_id")
             for r in rec.get("concept_ref") or []:
+                if _is_drug(r):  # MKN-only index (mirror build_code_index) — drug refs stay in the artifact
+                    continue
                 code = dotnorm(r.get("code") or "")
                 if cid and len(code) >= 3:
                     index[code].add(cid)

@@ -63,10 +63,13 @@ def test_chunk_has_code_family_match():
 
 
 def test_write_then_load_code_index_round_trip(tmp_path):
-    entities = [([_mkn("I10")], "c1<SEP>c2"), ([_mkn("E11.9")], "c2"), ([], "c3")]
+    drug = {"code": "c_abc", "system": "http://www.whocc.no/atc"}
+    entities = [([_mkn("I10"), drug], "c1<SEP>c2"), ([_mkn("E11.9")], "c2"), ([], "c3")]
     tags = build_chunk_tags(entities)
     manifest = write_chunk_tags(tags, tmp_path)
     assert manifest["chunk_count"] == 2  # c1, c2 (c3 had no ref)
-    idx = load_code_index(tmp_path)  # dot-normalized code -> {chunk_id}
+    idx = load_code_index(tmp_path)  # dot-normalized MKN code -> {chunk_id}
     assert idx["I10"] == {"c1", "c2"}
     assert idx["E119"] == {"c2"}
+    # the drug ref rides in the artifact (for the A-harvest) but is NOT in the retrieve code index
+    assert "C_ABC" not in idx and "c_abc" not in idx
