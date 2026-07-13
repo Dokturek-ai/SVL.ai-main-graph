@@ -897,21 +897,37 @@ def create_graph_routes(rag, api_key: Optional[str] = None):
         db = rag.doc_status.db
         ws = rag.doc_status.workspace
         graph = rag.chunk_entity_relation_graph
+
+        async def _existing(tables):
+            """Keep only tables present in this deployment. Some stores predate the DOC_CHUNKS→VDB_CHUNKS
+            split (chunk vectors still live in LIGHTRAG_DOC_CHUNKS) or lack the VDB entity/relation tables;
+            UPDATEing a missing table would abort the doc, so filter up-front instead."""
+            out = []
+            for t in tables:
+                row = await db.query("SELECT to_regclass($1) IS NOT NULL AS present", [t.lower()])
+                if row and row.get("present"):
+                    out.append(t)
+                else:
+                    logger.info(f"rename-edition: table {t} absent in this store — skipping")
+            return out
+
+        chunk_tables = await _existing(_RENAME_CHUNK_TABLES)
+        substr_tables = await _existing(_RENAME_SUBSTR_TABLES)
         total = len(plan.to_rename)
-        _write({"state": "running", "renamed": 0, "total": total})
+        _write({"state": "running", "renamed": 0, "total": total, "tables": chunk_tables + substr_tables})
         renamed = failed = 0
         # every UPDATE uses the SAME param dict {old, new, ws} → $1=old, $2=new, $3=ws — one convention
         # across whole-value and substring so a copy-edit can't silently swap old↔new.
         for old, new in plan.to_rename:
             try:
                 # 1. chunk-level whole-value (load-bearing: edition ordering reads these)
-                for tbl in _RENAME_CHUNK_TABLES:
+                for tbl in chunk_tables:
                     await db.execute(
                         f"UPDATE {tbl} SET file_path=$2 WHERE file_path=$1 AND workspace=$3",
                         {"old": old, "new": new, "ws": ws},
                     )
                 # 2. PG substring (provenance: `<SEP>`-joined; strpos avoids `_` being a LIKE wildcard)
-                for tbl in _RENAME_SUBSTR_TABLES:
+                for tbl in substr_tables:
                     await db.execute(
                         f"UPDATE {tbl} SET file_path=REPLACE(file_path,$1,$2) "
                         f"WHERE strpos(file_path,$1)>0 AND workspace=$3",
