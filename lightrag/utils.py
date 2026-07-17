@@ -14,6 +14,7 @@ import logging.handlers
 import os
 import re
 import time
+import unicodedata
 import uuid
 import warnings
 from dataclasses import dataclass
@@ -48,6 +49,7 @@ from lightrag.constants import (
     SOURCE_IDS_LIMIT_METHOD_FIFO,
     PARSED_DIR_NAME,
 )
+from lightrag.promotion.edition import parse_edition, edition_sort_key
 
 # Precompile regex pattern for JSON sanitization (module-level, compiled once)
 _SURROGATE_PATTERN = re.compile(r"[\uD800-\uDFFF\uFFFE\uFFFF]")
@@ -3360,6 +3362,46 @@ async def apply_rerank_if_enabled(
         return retrieved_docs
 
 
+def select_latest_editions(chunks: list[dict]) -> list[dict]:
+    """Prefer the latest edition of each work among the retrieved chunks.
+
+    Dated editions of one guideline (e.g. ``Arteriální hypertenze_2008.pdf`` /
+    ``_2014`` / ``_2024``) otherwise reach the narrator with equal standing, so a
+    superseded clinical value (an old target BP) can be cited as if current. This
+    drops a chunk whose work has a *newer* edition also present in the retrieved
+    set; a chunk that is the newest retrieved for its work is kept (best available
+    — the filter never empties context when the latest edition simply did not
+    surface). Edition is read from the file_path stem (``parse_edition``); the
+    work_id is NFC-normalized so NFC/NFD path variants group as one work.
+    """
+    if not chunks:
+        return chunks
+
+    parsed: list[tuple[str, str]] = []
+    latest_present: dict[str, str] = {}
+    for chunk in chunks:
+        work, year = parse_edition(chunk.get("file_path") or "")
+        work = unicodedata.normalize("NFC", work)
+        parsed.append((work, year))
+        current = latest_present.get(work)
+        if current is None or edition_sort_key(year) > edition_sort_key(current):
+            latest_present[work] = year
+
+    kept = [
+        chunk
+        for chunk, (work, year) in zip(chunks, parsed)
+        if edition_sort_key(year) >= edition_sort_key(latest_present[work])
+    ]
+
+    dropped = len(chunks) - len(kept)
+    if dropped > 0:
+        logger.info(
+            f"Edition filter: dropped {dropped} superseded-edition chunk(s), "
+            f"{len(kept)} remained"
+        )
+    return kept
+
+
 async def process_chunks_unified(
     query: str,
     unique_chunks: list[dict],
@@ -3424,6 +3466,10 @@ async def process_chunks_unified(
                 )
             if not unique_chunks:
                 return []
+
+    # 2b. Prefer the latest edition of each work (drop superseded-edition chunks
+    #     before top-k/token limiting so freed slots go to current content)
+    unique_chunks = select_latest_editions(unique_chunks)
 
     # 3. Apply chunk_top_k limiting if specified
     if query_param.chunk_top_k is not None and query_param.chunk_top_k > 0:
