@@ -25,7 +25,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **LLM:** OpenAI `gpt-5-mini` (`LLM_BINDING=openai`).
 - **Embedding:** Jina `jina-embeddings-v5-text-small`, dim 1024. `EMBEDDING_BINDING_HOST` must be the full `https://api.jina.ai/v1/embeddings` (the jina client POSTs the host as-is — a bare `/v1` returns 404).
-- **Rerank:** Jina `jina-reranker-v3` (`RERANK_BINDING=jina`).
+- **Rerank:** Cohere `rerank-v4.0-pro` (`RERANK_BINDING=cohere`), with `MIN_RERANK_SCORE=0.4` score floor (drops off-topic citations; `-fast` mis-scores Czech lexical collisions).
 - **Storage:** `PGKVStorage` / `PGVectorStorage` / `PGDocStatusStorage` (pgVector-Railway) + `Neo4JStorage` (Neo4j service). Not file-based.
 - **Parser:** MinerU local mode, `MINERU_LOCAL_BACKEND=pipeline` — the MinerU service is CPU-only (no GPU); `hybrid-auto-engine` crashes on CPU under load (`libgomp: Thread creation failed`).
 - **Language:** `SUMMARY_LANGUAGE=Czech`, `MINERU_LANGUAGE=cs` (Czech). Auth: `LIGHTRAG_API_KEY` set.
