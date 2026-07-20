@@ -16,8 +16,14 @@ from lightrag.base import DeletionResult
 import unicodedata
 
 from lightrag.maintenance.dedup import NodeView, plan_dedup
-from lightrag.maintenance.edition_rename import EDITION_YEARS, _new_name, plan_rename
+from lightrag.maintenance.edition_rename import (
+    EDITION_YEARS,
+    _new_name,
+    parsed_artifact_renames,
+    plan_rename,
+)
 from lightrag.utils import logger
+from lightrag.utils_pipeline import parsed_dir, sidecar_uri_for
 from ..utils_api import get_combined_auth_dependency
 from .document_routes import check_pipeline_busy_or_raise
 
@@ -973,6 +979,30 @@ def create_graph_routes(rag, api_key: Optional[str] = None):
                 failed += 1
                 logger.warning(f"rename-edition: '{old}' -> '{new}' failed: {e}")
             _write({"state": "running", "processed": processed, "failed": failed, "total": total})
+
+        # spec 020: reconcile the on-volume parsed artifacts to the renamed edition. The metadata rename above
+        # left each doc's `<work>_unknown.pdf.parsed` dir untouched, so the read-path resolver (derives the dir
+        # from the renamed `_<year>` file_path) can't load blocks.jsonl → page/section resolve None. Move the
+        # archived PDF + .parsed + .mineru_raw siblings and keep DOC_FULL.sidecar_location pointing at the moved
+        # .parsed dir. Best-effort + idempotent: never aborts the DB rename that already succeeded.
+        fs_renamed = 0
+        for old_p, new_p in parsed_artifact_renames(parsed_dir()):
+            is_parsed = new_p.name.endswith(".parsed")
+            old_uri, new_uri = (sidecar_uri_for(old_p), sidecar_uri_for(new_p)) if is_parsed else (None, None)
+            try:
+                os.rename(old_p, new_p)
+                fs_renamed += 1
+                if is_parsed:
+                    await db.execute(
+                        "UPDATE LIGHTRAG_DOC_FULL SET sidecar_location=$2 "
+                        "WHERE sidecar_location=$1 AND workspace=$3",
+                        {"old": old_uri, "new": new_uri, "ws": ws},
+                    )
+            except Exception as e:  # noqa: BLE001 — one bad rename must not abort the pass
+                logger.warning(f"rename-edition: parsed-artifact '{old_p}' -> '{new_p}' failed: {e}")
+        if fs_renamed:
+            logger.info(f"rename-edition: reconciled {fs_renamed} on-volume parsed artifact(s)")
+
         _write({"state": "done", "processed": processed, "failed": failed, "total": total})
         logger.info(f"rename-edition: done — processed={processed} failed={failed} total={total}")
 
