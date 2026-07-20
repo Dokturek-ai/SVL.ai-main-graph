@@ -4029,6 +4029,11 @@ async def kg_query(
         query_param.enable_rerank,
         "\n<llm_identity>\n",
         serialize_llm_cache_identity(llm_cache_identity),
+        # Version the answer cache by the synthesis-prompt templates: without this the
+        # key omits prompt text, so a prompt-only deploy keeps serving pre-fix answers
+        # for already-cached queries until eviction.
+        "\n<prompt_version>\n",
+        compute_args_hash(sys_prompt_temp, answer_style),
     )
 
     cached_result = await handle_cache(
@@ -6004,6 +6009,11 @@ async def naive_query(
         query_param.enable_rerank,
         "\n<llm_identity>\n",
         serialize_llm_cache_identity(llm_cache_identity),
+        # Version the answer cache by the synthesis-prompt templates: without this the
+        # key omits prompt text, so a prompt-only deploy keeps serving pre-fix answers
+        # for already-cached queries until eviction.
+        "\n<prompt_version>\n",
+        compute_args_hash(sys_prompt_template, answer_style),
     )
     cached_result = await handle_cache(
         hashing_kv, args_hash, user_query, query_param.mode, cache_type="query"
