@@ -14,6 +14,7 @@ unchanged (never worse than today's file-level block).
 import re
 
 _REF_HEADING = "### References"
+_HEADING_RE = re.compile(r"(?m)^###\s+References\s*$")
 _ID_RE = re.compile(r"\[(\d+)\]")
 
 
@@ -84,10 +85,15 @@ def render_reference_block_with_pages(response: str, references: list[dict]) -> 
     from the response — so the LLM is not the last writer of any page number (spec 017 R5)."""
     if not response or not references:
         return response
-    idx = response.rfind(_REF_HEADING)
-    if idx == -1:
+    # Anchor on a heading that starts its own line (not an inline "### References" quoted in body prose);
+    # take the LAST such heading — the prompt guarantees the real block is last ("nothing after references").
+    heads = list(_HEADING_RE.finditer(response))
+    if not heads:
         return response
+    idx = heads[-1].start()
 
+    # Rebuild only the reference lines from the cited ids; any stray prose the LLM emitted after the block is
+    # intentionally normalized away (the synthesis prompt forbids content after the references section).
     head, block = response[:idx], response[idx:]
     ref_by_id = {str(r.get("reference_id")): r for r in references if r.get("reference_id")}
 

@@ -118,6 +118,29 @@ def test_multi_ref_order_preserved():
     assert tail.index("[2]") < tail.index("[1]")
 
 
+def test_inline_heading_in_body_prose_not_split():
+    # A "### References" quoted inside body prose must NOT be treated as the block; only the real,
+    # line-anchored heading (last one) is rewritten. Guards against corrupting the answer body.
+    resp = (
+        "Doporučení viz ### References sekce originálu.\n\n"
+        "Léčba je doxycyklin.\n\n"
+        "### References\n- [1] doc.pdf\n"
+    )
+    refs = [_ref("1", "doc.pdf", [{"page": "29"}])]
+    out = render_reference_block_with_pages(resp, refs)
+    assert "Doporučení viz ### References sekce originálu." in out  # prose untouched
+    assert out.count("### References") == 2  # the inline mention survives, real heading kept once
+    assert "- [1] doc.pdf — s. 29" in out
+
+
+def test_int_reference_id_matches():
+    # enrichment contract is string ids, but pin int coercion so a future int id still joins the [n] token.
+    resp = _answer(["- [1] doc.pdf"])
+    refs = [{"reference_id": 1, "file_path": "doc.pdf", "chunks": [{"page": "29"}]}]
+    out = render_reference_block_with_pages(resp, refs)
+    assert "- [1] doc.pdf — s. 29" in out
+
+
 def test_id_not_in_references_dropped():
     # LLM cites [3] which isn't in the resolved list -> dropped, not fabricated
     resp = _answer(["- [1] a.pdf", "- [3] ghost.pdf"])
