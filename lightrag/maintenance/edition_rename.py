@@ -107,22 +107,20 @@ def parsed_artifact_renames(parsed_root: Path) -> list[tuple[Path, Path]]:
 
     Tries both NFC and NFD spellings — the Linux volume is normalization-sensitive and ingest wrote NFD, so only
     the spelling that physically exists yields (which keeps a derived ``sidecar_location`` URI matching the
-    stored one). Idempotent: a sibling whose new name already exists (or whose old name is gone) is skipped.
-    Reads the filesystem but never mutates it — the caller performs the ``os.rename``.
+    stored one). At most one pair per (doc, sibling): the ``break`` stops after the first hit so a
+    normalization-folding filesystem (macOS APFS, where both spellings resolve to the one inode) can't emit a
+    duplicate that would make the second ``os.rename`` fail on a missing source. Idempotent: a sibling whose new
+    name already exists (or whose old name is gone) yields nothing. Reads the filesystem but never mutates it —
+    the caller performs the ``os.rename``.
     """
     out: list[tuple[Path, Path]] = []
-    seen: set[Path] = set()
     for old_nfc, year in EDITION_YEARS.items():
         new_nfc = _new_name(old_nfc, year)
-        for norm in ("NFC", "NFD"):
-            old_base = unicodedata.normalize(norm, old_nfc)
-            new_base = unicodedata.normalize(norm, new_nfc)
-            for suffix in _RENAME_SIBLING_SUFFIXES:
-                old_p = parsed_root / f"{old_base}{suffix}"
-                new_p = parsed_root / f"{new_base}{suffix}"
-                if old_p in seen:
-                    continue
+        for suffix in _RENAME_SIBLING_SUFFIXES:
+            for norm in ("NFC", "NFD"):
+                old_p = parsed_root / f"{unicodedata.normalize(norm, old_nfc)}{suffix}"
+                new_p = parsed_root / f"{unicodedata.normalize(norm, new_nfc)}{suffix}"
                 if old_p.exists() and not new_p.exists():
                     out.append((old_p, new_p))
-                    seen.add(old_p)
+                    break  # this sibling is handled; don't also yield the other normalization
     return out
