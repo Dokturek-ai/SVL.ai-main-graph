@@ -873,11 +873,18 @@ def create_graph_routes(rag, api_key: Optional[str] = None):
         os.getenv("DEDUP_STATUS_DIR", "/app/data/maintenance")
     ) / "rename-edition-status.json"
 
-    # file_path persistence sites (postgres_impl DDL). Chunk tables = single-valued + load-bearing (the
-    # chunk registry + chat references read these → edition ordering). Substring = `<SEP>`-joined + capped
-    # provenance (source chips), display-only, best-effort. LIGHTRAG_DOC_STATUS is handled LAST, on its own
-    # (see _run_rename): it is the plan source, so leaving it until every other store is renamed means a
-    # partial failure re-plans the doc on the next run and the idempotent ops safely finish it.
+    # file_path persistence sites (postgres_impl DDL), as table-name PREFIXES. Chunk tables = single-valued
+    # + load-bearing (the chunk registry + chat references read these → edition ordering). Substring =
+    # `<SEP>`-joined + capped provenance (source chips), display-only, best-effort. LIGHTRAG_DOC_STATUS is
+    # handled LAST, on its own (see _run_rename): it is the plan source, so leaving it until every other
+    # store is renamed means a partial failure re-plans the doc on the next run and the idempotent ops
+    # safely finish it.
+    #
+    # PREFIX, not exact: PGVector suffixes the vector tables with the embedding model + dim
+    # (LIGHTRAG_VDB_CHUNKS → lightrag_vdb_chunks_bge_m3_latest_1024d), so an exact-name lookup misses the
+    # real store and silently skips it — the read-path (naive vector search) then keeps serving the stale
+    # `_unknown` file_path even after the KV/graph copies are renamed. `_resolve` expands each prefix to the
+    # actual tables present.
     _RENAME_CHUNK_TABLES = ("LIGHTRAG_DOC_CHUNKS", "LIGHTRAG_VDB_CHUNKS")
     _RENAME_SUBSTR_TABLES = ("LIGHTRAG_VDB_ENTITY", "LIGHTRAG_VDB_RELATION")
 
@@ -906,21 +913,31 @@ def create_graph_routes(rag, api_key: Optional[str] = None):
         ws = rag.doc_status.workspace
         graph = rag.chunk_entity_relation_graph
 
-        async def _existing(tables):
-            """Keep only tables present in this deployment. Some stores predate the DOC_CHUNKS→VDB_CHUNKS
-            split (chunk vectors still live in LIGHTRAG_DOC_CHUNKS) or lack the VDB entity/relation tables;
-            UPDATEing a missing table would abort the doc, so filter up-front instead."""
+        async def _resolve(prefixes):
+            """Expand each base name to the ACTUAL tables in this deployment, matched by prefix. PGVector
+            suffixes chunk/entity/relation tables with the embedding model + dim (e.g.
+            lightrag_vdb_chunks_bge_m3_latest_1024d), so a bare-name check misses them and the read-path
+            keeps serving the stale `_unknown`. A prefix with no match is skipped (some stores predate the
+            DOC_CHUNKS→VDB_CHUNKS split, or carry inactive model variants). Matching all variants is safe:
+            every UPDATE is idempotent and no-ops on an empty/already-renamed table."""
             out = []
-            for t in tables:
-                row = await db.query("SELECT to_regclass($1) IS NOT NULL AS present", [t.lower()])
-                if row and row.get("present"):
-                    out.append(t)
+            for base in prefixes:
+                rows = await db.query(
+                    "SELECT table_name FROM information_schema.tables "
+                    "WHERE table_schema='public' AND table_name LIKE $1 ESCAPE '\\' "
+                    "ORDER BY table_name",
+                    [base.lower().replace("_", r"\_") + "%"],  # `_` is a LIKE wildcard — match it literally
+                    multirows=True,
+                )
+                names = [r["table_name"] for r in (rows or [])]
+                if names:
+                    out.extend(names)
                 else:
-                    logger.info(f"rename-edition: table {t} absent in this store — skipping")
+                    logger.info(f"rename-edition: no table matching {base}* in this store — skipping")
             return out
 
-        chunk_tables = await _existing(_RENAME_CHUNK_TABLES)
-        substr_tables = await _existing(_RENAME_SUBSTR_TABLES)
+        chunk_tables = await _resolve(_RENAME_CHUNK_TABLES)
+        substr_tables = await _resolve(_RENAME_SUBSTR_TABLES)
 
         # concrete work items: BOTH unicode normalizations of every known (old -> new). Stores disagree
         # on NFC vs NFD (PG is NFD from the macOS-decomposed ingest; some Neo4j nodes are NFC), so a
