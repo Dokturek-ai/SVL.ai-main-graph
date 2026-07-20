@@ -101,7 +101,10 @@ async def passage_provenance(
     if not blocks:
         return None
     if mm_cache is None:
-        mm_cache = {}  # correctness without a per-request cache (reloads per chunk); callers pass one to cache
+        # No shared cache (a direct/test call): resolve correctly with a throwaway local map. It is
+        # discarded on return, so a caller that wants cross-chunk caching must pass its own dict (both
+        # production call sites do — a per-request dict beside blocks_cache).
+        mm_cache = {}
     if file_path not in mm_cache:
         mm_cache[file_path] = mm_loader(file_path)
     try:
