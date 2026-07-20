@@ -67,9 +67,10 @@ def test_missing_sidecar_or_unknown_block_returns_none():
 
 
 @pytest.mark.offline
-def test_multimodal_sidecar_type_is_rejected():
-    # a table/drawing sidecar points at tables.json/drawings.json, not blocks.jsonl
-    assert resolve_provenance({"type": "table", "id": "b1", "refs": [{"id": "b1"}]}, BLOCKS) is None
+def test_multimodal_sidecar_without_mm_map_returns_none():
+    # a table/drawing sidecar id is a tb-/im- id (not a blockid); without the
+    # mm_id_to_blockid map (spec 019) it stays unresolvable → title-only citation
+    assert resolve_provenance({"type": "table", "id": "tb-x", "refs": [{"id": "tb-x"}]}, BLOCKS) is None
 
 
 @pytest.mark.offline

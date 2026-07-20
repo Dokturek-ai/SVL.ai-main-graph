@@ -239,6 +239,7 @@ async def _enrich_references_with_chunks(rag, references, chunks):
     ref_id_to_content: Dict[str, List[str]] = {}
     ref_id_to_chunks: Dict[str, List[dict]] = {}
     blocks_cache: dict = {}  # per-request: a doc's blocks.jsonl loads once across its chunks
+    mm_cache: dict = {}  # per-request: a doc's mm-id→blockid map loads once (spec 019)
     for chunk in chunks:
         ref_id = chunk.get("reference_id", "")
         content = chunk.get("content", "")
@@ -250,7 +251,11 @@ async def _enrich_references_with_chunks(rag, references, chunks):
         chunk_id = chunk.get("chunk_id") or chunk.get("id") or ""
         # Guard the empty id: a blank chunk_id must not hit the store (an unspecified
         # get_by_id("") could return a bogus record and mis-attach page/section).
-        prov = (await passage_provenance(rag, chunk_id, file_path, blocks_cache) or {}) if chunk_id else {}
+        prov = (
+            (await passage_provenance(rag, chunk_id, file_path, blocks_cache, mm_cache) or {})
+            if chunk_id
+            else {}
+        )
         ref_id_to_chunks.setdefault(ref_id, []).append(
             {"text": content, **build_passage_links(chunk_id, file_path, prov)}
         )
