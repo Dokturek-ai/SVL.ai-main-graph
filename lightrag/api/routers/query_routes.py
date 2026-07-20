@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from lightrag.base import QueryParam
 from lightrag.api.utils_api import get_combined_auth_dependency
+from lightrag.sidecar.reference_block import render_reference_block_with_pages
 from lightrag.utils import logger
 from pydantic import BaseModel, Field, field_validator
 
@@ -508,6 +509,12 @@ def create_query_routes(rag, api_key: Optional[str] = None, top_k: int = 60):
             if request.include_references and request.include_chunk_content:
                 references = await _enrich_references_with_chunks(
                     rag, references, data.get("chunks", [])
+                )
+                # Deterministically fold the resolved page/section into the visible ``### References`` block
+                # (spec 017). Page comes only from the enriched payload — never the LLM prompt — so the
+                # probabilistic layer is not the last writer of a citation. No-op without a block/page.
+                response_content = render_reference_block_with_pages(
+                    response_content, references
                 )
 
             # Return response with or without references based on request
