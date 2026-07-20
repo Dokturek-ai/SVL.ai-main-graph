@@ -24,8 +24,14 @@ from __future__ import annotations
 
 import unicodedata
 from dataclasses import dataclass, field
+from pathlib import Path
 
 _UNKNOWN_SUFFIX = "_unknown.pdf"
+
+# On-volume per-doc artifact siblings that carry the doc name and so must move with an edition rename:
+# the archived source PDF (``<name>.pdf`` = "" suffix, since the name already ends ``.pdf``), the parsed
+# sidecar dir (``<name>.pdf.parsed``), and the raw MinerU dir (``<name>.pdf.mineru_raw``).
+_RENAME_SIBLING_SUFFIXES = ("", ".parsed", ".mineru_raw")
 
 # old file_path (NFC, as authored) -> verified edition year.
 EDITION_YEARS: dict[str, str] = {
@@ -88,3 +94,33 @@ def plan_rename(live_file_paths: list[str]) -> RenamePlan:
         else:
             plan.absent.append(old)
     return plan
+
+
+def parsed_artifact_renames(parsed_root: Path) -> list[tuple[Path, Path]]:
+    """``(old_path, new_path)`` for every on-volume `_unknown` artifact sibling whose `_<year>` target is free.
+
+    A spec-016 edition rename is metadata-only — it never moves the doc's parsed artifacts, so the read-path
+    resolver (which derives the sidecar dir from the *renamed* file_path) can't find ``blocks.jsonl`` and every
+    chunk of a renamed doc resolves ``page=None`` (spec 020). This planner intersects the frozen year map with
+    what is on ``parsed_root`` and returns the moves to make: for each doc, the archived source PDF, the
+    ``.parsed`` sidecar dir, and the ``.mineru_raw`` dir.
+
+    Tries both NFC and NFD spellings — the Linux volume is normalization-sensitive and ingest wrote NFD, so only
+    the spelling that physically exists yields (which keeps a derived ``sidecar_location`` URI matching the
+    stored one). At most one pair per (doc, sibling): the ``break`` stops after the first hit so a
+    normalization-folding filesystem (macOS APFS, where both spellings resolve to the one inode) can't emit a
+    duplicate that would make the second ``os.rename`` fail on a missing source. Idempotent: a sibling whose new
+    name already exists (or whose old name is gone) yields nothing. Reads the filesystem but never mutates it —
+    the caller performs the ``os.rename``.
+    """
+    out: list[tuple[Path, Path]] = []
+    for old_nfc, year in EDITION_YEARS.items():
+        new_nfc = _new_name(old_nfc, year)
+        for suffix in _RENAME_SIBLING_SUFFIXES:
+            for norm in ("NFC", "NFD"):
+                old_p = parsed_root / f"{unicodedata.normalize(norm, old_nfc)}{suffix}"
+                new_p = parsed_root / f"{unicodedata.normalize(norm, new_nfc)}{suffix}"
+                if old_p.exists() and not new_p.exists():
+                    out.append((old_p, new_p))
+                    break  # this sibling is handled; don't also yield the other normalization
+    return out

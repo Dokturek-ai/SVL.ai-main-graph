@@ -16,8 +16,14 @@ from lightrag.base import DeletionResult
 import unicodedata
 
 from lightrag.maintenance.dedup import NodeView, plan_dedup
-from lightrag.maintenance.edition_rename import EDITION_YEARS, _new_name, plan_rename
+from lightrag.maintenance.edition_rename import (
+    EDITION_YEARS,
+    _new_name,
+    parsed_artifact_renames,
+    plan_rename,
+)
 from lightrag.utils import logger
+from lightrag.utils_pipeline import parsed_dir, sidecar_uri_for
 from ..utils_api import get_combined_auth_dependency
 from .document_routes import check_pipeline_busy_or_raise
 
@@ -973,6 +979,44 @@ def create_graph_routes(rag, api_key: Optional[str] = None):
                 failed += 1
                 logger.warning(f"rename-edition: '{old}' -> '{new}' failed: {e}")
             _write({"state": "running", "processed": processed, "failed": failed, "total": total})
+
+        # spec 020: reconcile the on-volume parsed artifacts to the renamed edition. The metadata rename above
+        # left each doc's `<work>_unknown.pdf.parsed` dir untouched, so the read-path resolver (derives the dir
+        # from the renamed `_<year>` file_path) can't load blocks.jsonl → page/section resolve None. Move the
+        # archived PDF + .parsed + .mineru_raw siblings. Best-effort per item: never aborts the DB rename that
+        # already succeeded.
+        proot = parsed_dir()
+        fs_renamed = 0
+        for old_p, new_p in parsed_artifact_renames(proot):
+            try:
+                os.rename(old_p, new_p)
+                fs_renamed += 1
+            except Exception as e:  # noqa: BLE001 — one bad rename must not abort the pass
+                logger.warning(f"rename-edition: parsed-artifact '{old_p}' -> '{new_p}' failed: {e}")
+        if fs_renamed:
+            logger.info(f"rename-edition: reconciled {fs_renamed} on-volume parsed artifact(s)")
+
+        # Point DOC_FULL.sidecar_location at the moved `.parsed` dir. Deliberately INDEPENDENT of the rename
+        # loop above (its own statement, its own try) and run every pass regardless of whether a move happened
+        # this run — so a row left stale by an earlier partial run still heals. The whole-value UPDATE is a
+        # no-op once the value already carries the `_<year>` URI. Both unicode norms are swept because the
+        # stored URI encodes the NFD ingest spelling; the other norm matches 0 rows. `sidecar_uri_for` resolves
+        # a plain absolute path on Railway's direct volume mount (no symlink), so the derived old URI equals
+        # the one ingest stored even though the old dir no longer exists after the move.
+        for old_nfc, year in EDITION_YEARS.items():
+            new_nfc = _new_name(old_nfc, year)
+            for norm in ("NFC", "NFD"):
+                old_dir = proot / f"{unicodedata.normalize(norm, old_nfc)}.parsed"
+                new_dir = proot / f"{unicodedata.normalize(norm, new_nfc)}.parsed"
+                try:
+                    await db.execute(
+                        "UPDATE LIGHTRAG_DOC_FULL SET sidecar_location=$2 "
+                        "WHERE sidecar_location=$1 AND workspace=$3",
+                        {"old": sidecar_uri_for(old_dir), "new": sidecar_uri_for(new_dir), "ws": ws},
+                    )
+                except Exception as e:  # noqa: BLE001 — one bad update must not abort the pass
+                    logger.warning(f"rename-edition: sidecar_location update for '{old_dir}' failed: {e}")
+
         _write({"state": "done", "processed": processed, "failed": failed, "total": total})
         logger.info(f"rename-edition: done — processed={processed} failed={failed} total={total}")
 
