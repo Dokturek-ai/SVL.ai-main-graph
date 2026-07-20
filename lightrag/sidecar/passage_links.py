@@ -18,9 +18,15 @@ import urllib.parse
 from pathlib import Path
 from typing import Optional
 
-from lightrag.sidecar.provenance import load_blocks_by_id, resolve_provenance
+from lightrag.sidecar.provenance import (
+    load_blocks_by_id,
+    load_mm_id_to_blockid,
+    resolve_provenance,
+)
 from lightrag.utils import logger
 from lightrag.utils_pipeline import parsed_artifact_dir_for
+
+_MM_SIDECAR_SUFFIXES = (".tables.json", ".drawings.json", ".equations.json")
 
 
 def load_blocks_for_doc(file_path: str) -> Optional[dict]:
@@ -43,15 +49,42 @@ def load_blocks_for_doc(file_path: str) -> Optional[dict]:
         return None
 
 
-async def passage_provenance(rag, chunk_id, file_path, blocks_cache, *, load_blocks=None):
+def load_mm_map_for_doc(file_path: str) -> dict:
+    """Locate + load ``<doc>.parsed/*.{tables,drawings,equations}.json`` → ``{mm_id: blockid}`` (spec 019).
+
+    Mirrors :func:`load_blocks_for_doc`: prefer the exact ``<stem>.<suffix>`` (the writer's name) so a
+    collision-suffixed sibling dir can't resolve against a different doc, glob only as a fallback. Best-effort:
+    any failure / no mm sidecars ⇒ ``{}`` (mm chunks then degrade to today's title-only citation)."""
+    try:
+        parsed = parsed_artifact_dir_for(file_path)
+        if not parsed.exists():
+            return {}
+        stem = Path(file_path).stem
+        paths: list = []
+        for suffix in _MM_SIDECAR_SUFFIXES:
+            exact = parsed / f"{stem}{suffix}"
+            if exact.exists():
+                paths.append(exact)
+            else:
+                paths.extend(sorted(parsed.glob(f"*{suffix}")))
+        return load_mm_id_to_blockid(paths)
+    except Exception as e:
+        logger.debug("section-crop: mm-map load failed for %s: %s", file_path, e)
+        return {}
+
+
+async def passage_provenance(
+    rag, chunk_id, file_path, blocks_cache, mm_cache=None, *, load_blocks=None, load_mm_map=None
+):
     """Resolve ``{page, pages, section, bbox}`` for a cited chunk, or ``None``.
 
     Fetches the chunk's ``sidecar`` from the store (the ``aquery_data`` projection drops it) and joins it
-    against the doc's ``blocks.jsonl`` via the shipped resolver. ``blocks_cache`` is per-request so a doc's
-    blocks load once across its chunks. ``load_blocks`` is injectable for tests; it defaults to the
-    module-level loader looked up at call time (so it stays monkeypatch-able). All best-effort: error ⇒
-    ``None``."""
+    against the doc's ``blocks.jsonl`` via the shipped resolver. ``blocks_cache`` (and ``mm_cache``, spec 019 —
+    the ``{mm_id: blockid}`` map for multimodal chunks) are per-request so a doc's sidecars load once across its
+    chunks. ``load_blocks`` / ``load_mm_map`` are injectable for tests; they default to the module-level loaders
+    looked up at call time (so they stay monkeypatch-able). All best-effort: error ⇒ ``None``."""
     loader = load_blocks if load_blocks is not None else load_blocks_for_doc
+    mm_loader = load_mm_map if load_mm_map is not None else load_mm_map_for_doc
     try:
         rec = await rag.text_chunks.get_by_id(chunk_id)
     except Exception as e:
@@ -67,8 +100,12 @@ async def passage_provenance(rag, chunk_id, file_path, blocks_cache, *, load_blo
     blocks = blocks_cache[file_path]
     if not blocks:
         return None
+    if mm_cache is None:
+        mm_cache = {}  # correctness without a per-request cache (reloads per chunk); callers pass one to cache
+    if file_path not in mm_cache:
+        mm_cache[file_path] = mm_loader(file_path)
     try:
-        return resolve_provenance(sidecar, blocks)
+        return resolve_provenance(sidecar, blocks, mm_cache[file_path])
     except Exception as e:
         logger.debug("section-crop: resolve_provenance failed for %s: %s", chunk_id, e)
         return None

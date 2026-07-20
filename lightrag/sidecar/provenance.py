@@ -23,29 +23,52 @@ from typing import Any
 _SECTION_SEP = " › "
 
 
-def _block_ids(sidecar: Any) -> list[str]:
-    """Ordered, deduped blockids referenced by a chunk's ``sidecar`` field.
+_MM_TYPES = ("table", "drawing", "equation")
 
-    v1 resolves **content-block** provenance only. A multimodal chunk's sidecar is
-    ``type:"table"``/``"drawing"`` and points at ``tables.json``/``drawings.json``,
-    not ``blocks.jsonl`` — reject it explicitly rather than let its id fail to
-    resolve as a silent ``None``.
-    """
-    if not isinstance(sidecar, dict):
-        return []
-    if sidecar.get("type") not in (None, "block"):
-        return []
+
+def _raw_ids(sidecar: dict) -> list[str]:
+    """Ordered, deduped ids from a sidecar's ``refs[].id`` (else its own ``id``)."""
     ids: list[str] = []
     seen: set[str] = set()
     for ref in sidecar.get("refs") or []:
         if isinstance(ref, dict) and ref.get("id"):
-            bid = str(ref["id"])
-            if bid not in seen:
-                seen.add(bid)
-                ids.append(bid)
+            rid = str(ref["id"])
+            if rid not in seen:
+                seen.add(rid)
+                ids.append(rid)
     if not ids and sidecar.get("id"):
         ids = [str(sidecar["id"])]
     return ids
+
+
+def _block_ids(sidecar: Any, mm_id_to_blockid: dict[str, str] | None = None) -> list[str]:
+    """Ordered, deduped blockids referenced by a chunk's ``sidecar`` field.
+
+    A content-block sidecar's ids **are** blockids. A multimodal chunk's sidecar is
+    ``type:"table"``/``"drawing"``/``"equation"`` and its id is a ``tb-``/``im-``/``eq-``
+    id that points at ``tables.json``/``drawings.json``/``equations.json``, not
+    ``blocks.jsonl`` — translate it to the entry's ``blockid`` (a positioned content
+    block) via ``mm_id_to_blockid`` (spec 019). Without a map a multimodal sidecar is
+    unresolvable → ``[]`` → the caller degrades to today's title-only citation.
+    """
+    if not isinstance(sidecar, dict):
+        return []
+    stype = sidecar.get("type")
+    raw = _raw_ids(sidecar)
+    if stype in (None, "block"):
+        return raw
+    if stype in _MM_TYPES and mm_id_to_blockid:
+        ids: list[str] = []
+        seen: set[str] = set()
+        for rid in raw:
+            bid = mm_id_to_blockid.get(rid)
+            if bid:
+                bid = str(bid)
+                if bid not in seen:
+                    seen.add(bid)
+                    ids.append(bid)
+        return ids
+    return []
 
 
 def _bbox_position(block: dict) -> dict | None:
@@ -63,7 +86,11 @@ def _section(block: dict) -> str:
     return _SECTION_SEP.join(parts)
 
 
-def resolve_provenance(sidecar: Any, blocks_by_id: dict[str, dict]) -> dict | None:
+def resolve_provenance(
+    sidecar: Any,
+    blocks_by_id: dict[str, dict],
+    mm_id_to_blockid: dict[str, str] | None = None,
+) -> dict | None:
     """Resolve a chunk's ``sidecar`` against ``blockid -> block row`` to
     ``{page, pages, section, bbox, block_ids}``.
 
@@ -72,8 +99,12 @@ def resolve_provenance(sidecar: Any, blocks_by_id: dict[str, dict]) -> dict | No
     span a page break). Returns ``None`` when the chunk has no resolvable
     provenance (no sidecar, or none of its blockids are present) — the caller
     then omits the fields and degrades to today's citation.
+
+    ``mm_id_to_blockid`` (spec 019) lets a multimodal chunk (table/drawing/equation)
+    resolve too: its sidecar id is mapped to the containing content block's blockid.
+    Absent/empty ⇒ byte-for-byte identical to the content-only behaviour.
     """
-    ids = _block_ids(sidecar)
+    ids = _block_ids(sidecar, mm_id_to_blockid)
     covered = [blocks_by_id[bid] for bid in ids if bid in blocks_by_id]
     if not covered:
         return None
@@ -118,4 +149,32 @@ def load_blocks_by_id(blocks_jsonl_path: str | Path) -> dict[str, dict]:
                 continue
             if isinstance(row, dict) and row.get("type") == "content" and row.get("blockid"):
                 out[str(row["blockid"])] = row
+    return out
+
+
+def load_mm_id_to_blockid(json_paths: Any) -> dict[str, str]:
+    """Load ``mm_id -> blockid`` from a doc's multimodal sidecars (spec 019).
+
+    ``json_paths`` = the doc's ``*.tables.json`` / ``*.drawings.json`` /
+    ``*.equations.json`` (root keys ``tables``/``drawings``/``equations``; each
+    entry keyed by its ``tb-``/``im-``/``eq-`` id carries a ``blockid`` pointing at a
+    positioned content block in ``blocks.jsonl``). Best-effort: unreadable file /
+    non-dict root / entry without ``blockid`` skipped. Impure helper for the endpoint
+    layer; keep :func:`resolve_provenance` I/O-free for testing.
+    """
+    out: dict[str, str] = {}
+    for path in json_paths or []:
+        try:
+            payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        for root in ("tables", "drawings", "equations"):
+            items = payload.get(root)
+            if not isinstance(items, dict):
+                continue
+            for mm_id, item in items.items():
+                if isinstance(item, dict) and item.get("blockid"):
+                    out[str(mm_id)] = str(item["blockid"])
     return out

@@ -32,6 +32,7 @@ from lightrag.api.utils_api import get_combined_auth_dependency
 from lightrag.sidecar.passage_links import (
     build_passage_links,
     load_blocks_for_doc,
+    load_mm_map_for_doc,
     passage_provenance,
 )
 from lightrag.sidecar.provenance import resolve_provenance
@@ -112,6 +113,7 @@ class RetrievedPassage(BaseModel):
 # existing spec-004 tests reference (tests monkeypatch ``_load_blocks_for_doc``; the retrieve endpoint
 # passes it explicitly so the patch takes effect).
 _load_blocks_for_doc = load_blocks_for_doc
+_load_mm_map_for_doc = load_mm_map_for_doc
 _passage_provenance = passage_provenance
 
 
@@ -255,6 +257,7 @@ def create_guidelines_routes(rag, api_key: Optional[str] = None):
             async def _build(apply_filter: bool) -> List[RetrievedPassage]:
                 out: List[RetrievedPassage] = []
                 blocks_cache: dict = {}  # per-build: a doc's blocks.jsonl loads once across its chunks
+                mm_cache: dict = {}  # per-build: a doc's mm-id→blockid map loads once (spec 019)
                 for chunk in chunks:
                     content = chunk.get("content")
                     if not content:
@@ -265,7 +268,13 @@ def create_guidelines_routes(rag, api_key: Optional[str] = None):
                     file_path = chunk.get("file_path", "unknown_source")
                     prov = (
                         await passage_provenance(
-                            rag, chunk_id, file_path, blocks_cache, load_blocks=_load_blocks_for_doc
+                            rag,
+                            chunk_id,
+                            file_path,
+                            blocks_cache,
+                            mm_cache,
+                            load_blocks=_load_blocks_for_doc,
+                            load_mm_map=_load_mm_map_for_doc,
                         )
                         or {}
                     )
@@ -492,7 +501,8 @@ def create_guidelines_routes(rag, api_key: Optional[str] = None):
             raise HTTPException(status_code=404, detail="chunk has no provenance sidecar")
         file_path = chunk.get("file_path", "")
         blocks = _load_blocks_for_doc(file_path)
-        prov = resolve_provenance(sidecar, blocks) if blocks else None
+        mm_map = _load_mm_map_for_doc(file_path)  # spec 019: resolve mm-chunk crops too
+        prov = resolve_provenance(sidecar, blocks, mm_map) if blocks else None
         try:
             primary_page = int(prov["page"]) if prov and prov.get("page") is not None else None
         except (TypeError, ValueError):
