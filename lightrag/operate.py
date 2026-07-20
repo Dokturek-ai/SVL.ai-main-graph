@@ -4902,6 +4902,70 @@ async def _merge_all_chunks(
     return merged_chunks
 
 
+# --- Reserve-footnote inliner (deterministic, verify-or-abstain) ---
+# SVL ATB dosing tables attach reserve/second-line status out-of-line via "**"/"***" footnote
+# markers: a drug bullet carries a bare marker ("azitromycin**") while the marker's legend
+# ("** Pouze pacientům, kteří nemohou užívat …") sits in a SEPARATE chunk (the table footnotes).
+# The concise answer-synthesis LLM otherwise flattens those reserve drugs into co-equal first-line
+# bullets. This folds the legend back onto each marker use by PURE INSERTION — it never alters
+# existing characters, so doses/loading-dose text are provably preserved. Abstain-safe: a marker
+# whose legend was not retrieved is left untouched (the source condition is never invented or
+# paraphrased). The ubiquitous single "*" (pediatric mg/kg dose) is excluded on purpose.
+
+# Legend def: a "**"/"***" marker (asterisks may be backslash-escaped by MinerU) whose FIRST star is
+# not preceded by a word char / another star / a backslash (so it can't latch onto the tail of a
+# "***" run, e.g. "doxycyklin***"), followed by whitespace + the condition prose up to the next
+# ";"/newline.
+_RESERVE_LEGEND_RE = re.compile(
+    r"(?<![\w\\*])(?P<marker>(?:\\?\*){2,3})(?![\\*])[ \t]+(?P<cond>[^;\n]+?)(?=\s*(?:[;\n]|$))"
+)
+# Marker use: "**"/"***" directly after a word char, not followed by another asterisk/backslash/word
+# char.
+_RESERVE_USE_RE = re.compile(r"(?<=\w)(?:\\?\*){2,3}(?![\\*\w])")
+# Markdown-bold opener ("**word"): a bold-close ("word**") is locally indistinguishable from a marker
+# use, so any line carrying an opener is skipped wholesale to avoid a false insertion. We guard on the
+# OPENER only (not the closer): a reserve marker use is itself "word**" at a boundary, so a closer
+# guard would skip the very lines we must transform. A stray cross-line bold-close is not observed in
+# the SVL ATB table/footnote chunks; worst case it appends an additive "[**: …]" note (never a dose
+# edit), so the residual is low-harm.
+_OPENING_BOLD_RE = re.compile(r"(?:(?<=\s)|^)(?:\\?\*){2,}(?=\w)")
+
+
+def _collect_reserve_legends(texts: list[str]) -> dict[int, str]:
+    """Map marker length (2 or 3) -> its legend condition, scanned across all retrieved chunks."""
+    legends: dict[int, str] = {}
+    for text in texts:
+        if "*" not in text:
+            continue
+        for m in _RESERVE_LEGEND_RE.finditer(text):
+            # Count stars in the MARKER only — a "*" inside the condition text (e.g. a footnote
+            # cross-referencing a pediatric "4 mg/kg*" dose) must not inflate the key.
+            k = m.group("marker").count("*")
+            cond = m.group("cond").strip()
+            if k not in legends and len(cond) >= 10:
+                legends[k] = cond
+    return legends
+
+
+def _apply_reserve_legends(text: str, legends: dict[int, str]) -> str:
+    """Insert each marker's legend inline after its use (pure insertion; no existing char changes)."""
+    if not legends or "*" not in text:
+        return text
+
+    def _repl(m: re.Match) -> str:
+        stars = "*" * m.group(0).count("*")
+        cond = legends.get(len(stars))
+        if not cond:
+            return m.group(0)
+        return f"{m.group(0)} [{stars}: {cond}]"
+
+    # Per line: skip any line that uses markdown bold (a bold-close mimics a marker use).
+    return "\n".join(
+        line if _OPENING_BOLD_RE.search(line) else _RESERVE_USE_RE.sub(_repl, line)
+        for line in text.split("\n")
+    )
+
+
 async def _build_context_str(
     entities_context: list[dict],
     relations_context: list[dict],
@@ -5011,12 +5075,15 @@ async def _build_context_str(
 
     # Rebuild chunks_context with truncated chunks
     # The actual tokens may be slightly less than available_chunk_tokens due to deduplication logic
+    reserve_legends = _collect_reserve_legends(
+        [chunk["content"] for chunk in truncated_chunks]
+    )
     chunks_context = []
     for i, chunk in enumerate(truncated_chunks):
         chunks_context.append(
             {
                 "reference_id": chunk["reference_id"],
-                "content": chunk["content"],
+                "content": _apply_reserve_legends(chunk["content"], reserve_legends),
             }
         )
 
@@ -5949,12 +6016,15 @@ async def naive_query(
     }
 
     # Build chunks_context from processed chunks with reference IDs
+    reserve_legends = _collect_reserve_legends(
+        [chunk["content"] for chunk in processed_chunks_with_ref_ids]
+    )
     chunks_context = []
     for i, chunk in enumerate(processed_chunks_with_ref_ids):
         chunks_context.append(
             {
                 "reference_id": chunk["reference_id"],
-                "content": chunk["content"],
+                "content": _apply_reserve_legends(chunk["content"], reserve_legends),
             }
         )
 
