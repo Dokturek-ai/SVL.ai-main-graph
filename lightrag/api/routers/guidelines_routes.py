@@ -473,9 +473,17 @@ def create_guidelines_routes(rag, api_key: Optional[str] = None):
     @router.get("/v1/guidelines/section-crop")
     async def guidelines_section_crop(
         chunk_id: str = Query(..., description="Cited chunk id (from the retrieve citation)."),
+        page: Optional[int] = Query(
+            None,
+            description="Optional page override; must be one of the chunk's pages. "
+            "Absent → primary page + bbox highlight (spec 018).",
+        ),
     ):
         """R3: the source PDF page region a cited passage came from — page N rasterized with the cited
-        block highlighted, as a PNG. Rendered live from the current sidecar (bbox never persisted)."""
+        block highlighted, as a PNG. Rendered live from the current sidecar (bbox never persisted).
+
+        ``page`` (spec 018) selects a secondary page of a multi-page chunk: it must be one of the chunk's
+        resolved ``pages`` (else 404), and the bbox highlight is drawn only on the primary page."""
         from lightrag.utils_pipeline import configured_input_dir
 
         chunk = await rag.text_chunks.get_by_id(chunk_id)
@@ -486,18 +494,34 @@ def create_guidelines_routes(rag, api_key: Optional[str] = None):
         blocks = _load_blocks_for_doc(file_path)
         prov = resolve_provenance(sidecar, blocks) if blocks else None
         try:
-            page_num = int(prov["page"]) if prov and prov.get("page") is not None else None
+            primary_page = int(prov["page"]) if prov and prov.get("page") is not None else None
         except (TypeError, ValueError):
-            page_num = None
-        if page_num is None:
+            primary_page = None
+        if primary_page is None:
             raise HTTPException(status_code=404, detail="chunk has no resolvable page/bbox")
+        if page is None:
+            render_page, bbox = primary_page, prov.get("bbox")
+        else:
+            chunk_pages = []
+            for p in prov.get("pages") or []:
+                try:
+                    chunk_pages.append(int(p))
+                except (TypeError, ValueError):
+                    pass
+            if page not in chunk_pages:
+                raise HTTPException(
+                    status_code=404, detail="requested page is not one of the chunk's pages"
+                )
+            # bbox is the PRIMARY block's box only — a secondary page has no stored highlight.
+            render_page = page
+            bbox = prov.get("bbox") if page == primary_page else None
         pdf_path = Path(configured_input_dir()) / Path(file_path).name
         if not pdf_path.exists():
             raise HTTPException(status_code=404, detail="source PDF not available")
         try:
             # CPU-bound rasterization off the event loop
             png = await asyncio.to_thread(
-                _render_section_crop, pdf_path, page_num, prov.get("bbox")
+                _render_section_crop, pdf_path, render_page, bbox
             )
         except Exception as e:
             logger.warning("section-crop render failed for %s: %s", chunk_id, e)
