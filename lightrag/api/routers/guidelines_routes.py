@@ -551,4 +551,26 @@ def create_guidelines_routes(rag, api_key: Optional[str] = None):
             raise HTTPException(status_code=404, detail="PDF not found")
         return FileResponse(str(pdf_path), media_type="application/pdf", filename=name)
 
+    @router.get("/v1/guidelines/pdf-page")  # PUBLIC (see section-crop): browser <img src> can't send the key
+    async def guidelines_pdf_page(
+        doc: str = Query(..., description="Source document file_path / name."),
+        page: int = Query(1, ge=1, description="1-based page to rasterize (default 1 = document cover)."),
+    ):
+        """A rasterized page of the source PDF (no chunk, no highlight) — lets a citation card show a
+        page thumbnail (e.g. page 1 = the document cover) without resolving a chunk's crop."""
+        from lightrag.utils_pipeline import configured_input_dir
+
+        name = Path(doc).name  # basename only — no path traversal
+        pdf_path = Path(configured_input_dir()) / name
+        if not name.lower().endswith(".pdf") or not pdf_path.exists():
+            raise HTTPException(status_code=404, detail="PDF not found")
+        try:
+            png = await asyncio.to_thread(_render_section_crop, pdf_path, page, None)
+        except ValueError:
+            raise HTTPException(status_code=404, detail="page out of range")
+        except Exception as e:
+            logger.warning("pdf-page render failed for %s p%s: %s", name, page, e)
+            raise HTTPException(status_code=500, detail="page render failed")
+        return Response(content=png, media_type="image/png")
+
     return router

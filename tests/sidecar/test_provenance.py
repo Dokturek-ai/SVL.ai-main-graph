@@ -50,6 +50,40 @@ def test_resolves_page_section_bbox_from_primary_block():
 
 
 @pytest.mark.offline
+def test_bbox_is_union_of_same_page_blocks():
+    # two blocks on the SAME page → bbox frames the whole chunk (min x0/y0, max x1/y1).
+    blocks = {
+        "b1": _block("b1", "Diagnostika", ["Akutní cystitida"], 3, [72.0, 120.0, 400.0, 180.0]),
+        "b2": _block("b2", "Diagnostika", ["Akutní cystitida"], 3, [80.0, 90.0, 520.0, 160.0]),
+    }
+    sidecar = {"id": "b1", "refs": [{"id": "b1"}, {"id": "b2"}]}
+    prov = resolve_provenance(sidecar, blocks)
+    assert prov["page"] == 3
+    assert prov["pages"] == [3]
+    assert prov["bbox"] == [72.0, 90.0, 520.0, 180.0]
+
+
+@pytest.mark.offline
+def test_bbox_union_excludes_other_page_blocks():
+    # cross-page chunk: only the primary-page block contributes (a box can't span a page break).
+    sidecar = {"id": "b1", "refs": [{"id": "b1"}, {"id": "b2"}]}
+    prov = resolve_provenance(sidecar, BLOCKS)  # b1 p3, b2 p4
+    assert prov["bbox"] == [72.0, 120.0, 520.0, 180.0]  # == b1 alone, b2 (p4) excluded
+
+
+@pytest.mark.offline
+def test_bbox_union_abstains_when_primary_page_unknown():
+    # primary block has a range but NO anchor (unknown page) → union must not merge other blocks in.
+    blocks = {
+        "b1": _block("b1", "X", ["Y"], None, [72.0, 120.0, 400.0, 180.0]),
+        "b2": _block("b2", "X", ["Y"], None, [10.0, 10.0, 520.0, 520.0]),
+    }
+    prov = resolve_provenance({"id": "b1", "refs": [{"id": "b1"}, {"id": "b2"}]}, blocks)
+    assert prov["page"] is None
+    assert prov["bbox"] == [72.0, 120.0, 400.0, 180.0]  # primary box unchanged, b2 not merged
+
+
+@pytest.mark.offline
 def test_multi_block_chunk_lists_all_pages_primary_first():
     # a chunk spanning a page break covers b1 (p3) then b2 (p4)
     sidecar = {"id": "b1", "refs": [{"id": "b1"}, {"id": "b2"}]}

@@ -94,9 +94,11 @@ def resolve_provenance(
     """Resolve a chunk's ``sidecar`` against ``blockid -> block row`` to
     ``{page, pages, section, bbox, block_ids}``.
 
-    Uses the FIRST covered block (the chunk's start) for ``page``/``section``/
-    ``bbox``; ``pages`` lists every page the chunk's blocks touch (a chunk can
-    span a page break). Returns ``None`` when the chunk has no resolvable
+    Uses the FIRST covered block (the chunk's start) for ``page``/``section``;
+    ``bbox`` is the union of the covered blocks on that primary page (frames the
+    whole chunk, not just its first block); ``pages`` lists every page the chunk's
+    blocks touch (a chunk can span a page break). Returns ``None`` when the chunk
+    has no resolvable
     provenance (no sidecar, or none of its blockids are present) — the caller
     then omits the fields and degrades to today's citation.
 
@@ -113,7 +115,24 @@ def resolve_provenance(
     pos = _bbox_position(primary)
     page = pos.get("anchor") if pos else None
     rng = pos.get("range") if pos else None
-    bbox = list(rng) if isinstance(rng, list) else None
+    bbox = list(rng) if isinstance(rng, list) and len(rng) == 4 else None
+
+    # Union the boxes of every covered block on the primary page, so the highlight frames the whole
+    # chunk, not just its first block. Confined to the primary page — a bbox can't span a page break;
+    # skip when the primary page is unknown (else blocks of unknown page would merge in).
+    if bbox is not None and page is not None:
+        for b in covered[1:]:
+            bp = _bbox_position(b)
+            if bp is None or str(bp.get("anchor")) != str(page):
+                continue
+            r = bp.get("range")
+            if isinstance(r, list) and len(r) == 4:
+                bbox = [
+                    min(bbox[0], r[0]),
+                    min(bbox[1], r[1]),
+                    max(bbox[2], r[2]),
+                    max(bbox[3], r[3]),
+                ]
 
     pages: list = []
     for b in covered:
