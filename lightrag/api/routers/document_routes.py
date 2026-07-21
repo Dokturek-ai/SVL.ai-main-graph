@@ -49,6 +49,7 @@ from lightrag.utils import (
     move_file_to_parsed_dir,
 )
 from lightrag.promotion.edition_resolve import resolve_edition_year
+from lightrag.promotion.ingest_denylist import denylisted_reason
 from lightrag.api.utils_api import get_combined_auth_dependency
 from ..config import global_args
 
@@ -1881,6 +1882,26 @@ async def pipeline_enqueue_file(
         track_id = generate_track_id("unknown")
 
     try:
+        denied = denylisted_reason(file_path.name)
+        if denied:
+            error_files = [
+                {
+                    "file_path": str(file_path.name),
+                    "error_description": "[File Extraction]Out-of-corpus document rejected",
+                    "original_error": (
+                        f"Filename matches ingest denylist pattern {denied!r} — out-of-domain for the "
+                        "SVL guidelines graph (spec 021). Not ingested."
+                    ),
+                    "file_size": 0,
+                }
+            ]
+            await rag.apipeline_enqueue_error_documents(error_files, track_id)
+            logger.warning(
+                f"[File Extraction]Rejected out-of-corpus document {file_path.name} "
+                f"(denylist pattern {denied!r})"
+            )
+            return False, track_id
+
         content = ""
         ext = file_path.suffix.lower()
         if ext == ".pdf":
