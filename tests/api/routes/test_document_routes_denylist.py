@@ -54,9 +54,10 @@ async def test_denylisted_pdf_is_rejected_before_enqueue(tmp_path):
 
 
 async def test_legit_pdf_is_not_rejected_by_denylist(tmp_path, monkeypatch):
-    # A non-denylisted PDF must pass the guard. Stop right after by faking the edition
-    # resolver to raise, so we assert the guard did NOT reject (no out-of-corpus error) without
-    # invoking the real parser.
+    # A non-denylisted PDF must pass the guard. To prove control reached PAST the guard without
+    # invoking the real parser, fake the edition resolver (the next step) to raise a sentinel; the
+    # function's catch-all then records a generic error. Asserting that specific error — not merely
+    # the absence of the out-of-corpus string — is what makes this non-tautological.
     monkeypatch.setattr(
         _document_routes,
         "_resolve_and_rename_edition",
@@ -68,8 +69,10 @@ async def test_legit_pdf_is_not_rejected_by_denylist(tmp_path, monkeypatch):
 
     success, _ = await pipeline_enqueue_file(rag, file_path, "track-ok")
 
-    # guard passed -> the outer except records a generic error, NOT the out-of-corpus rejection
     assert success is False
+    assert rag.enqueued == []
     assert len(rag.errors) == 1
     error_files, _ = rag.errors[0]
-    assert "Out-of-corpus document rejected" not in error_files[0]["error_description"]
+    # hit the catch-all (past the guard, in the resolver step), not the denylist rejection
+    assert error_files[0]["error_description"] == "Unexpected processing error"
+    assert "stop-after-guard" in error_files[0]["original_error"]
