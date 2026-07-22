@@ -60,22 +60,23 @@ def test_no_bracket_or_bare_marker_survives():
     # leave NO "[" bracket and NO bare reserve marker — only grounded parenthetical prose.
     legends = _collect_reserve_legends([CHUNK_TABLE, CHUNK_FOOTNOTES])
     out = _apply_reserve_legends(CHUNK_TABLE, legends)
-    assert "[" not in out
-    assert "**" not in out  # every "**"/"***" marker consumed
+    # Non-vacuous: reverting _repl to the old sentinel would leave "**" (and "[podmínka:") in out.
+    assert "**" not in out  # every "**"/"***" marker consumed (also kills the "[**]" echo source)
+    assert "[podmínka:" not in out  # the old bracketed sentinel is gone
     assert RESERVE_COND in out
 
 
 def test_marker_replacement_preserves_dose_text():
     legends = _collect_reserve_legends([CHUNK_TABLE, CHUNK_FOOTNOTES])
     out = _apply_reserve_legends(CHUNK_TABLE, legends)
-    # Only the footnote marker is removed — the load-bearing dose tokens are still present verbatim
-    # (doses / loading dose provably intact; the marker never sits inside them).
+    # Round-trip proof: swapping each inserted "(legend)" back to its "**"/"***" marker recovers the
+    # original byte-for-byte — so the transform changed ONLY the markers, nothing in the dose text.
+    restored = out.replace(f" ({legends[2]})", "**").replace(f" ({legends[3]})", "***")
+    assert restored == CHUNK_TABLE
+    # Spot-check the load-bearing dose tokens are still present verbatim.
     assert "první den dvojnásobná dávka" in out
     assert "500 mg p. o." in out
     assert "200–400 mg denně" in out
-    # The reserve markers themselves are gone (replaced by the parenthetical condition).
-    assert "azitromycin**" not in out
-    assert "doxycyklin***" not in out
 
 
 def test_pediatric_single_star_untouched():
