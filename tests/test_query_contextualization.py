@@ -15,7 +15,7 @@ from lightrag.operate import _contextualize_query_with_history
 
 def _global_config(llm_func):
     return {
-        "role_llm_funcs": {"query": llm_func},
+        "role_llm_funcs": {"keyword": llm_func},
         "addon_params": {"language": "Czech"},
         "_resolved_summary_language": "Czech",
     }
