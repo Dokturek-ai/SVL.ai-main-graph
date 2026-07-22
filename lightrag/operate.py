@@ -4906,11 +4906,15 @@ async def _merge_all_chunks(
 # SVL ATB dosing tables attach reserve/second-line status out-of-line via "**"/"***" footnote
 # markers: a drug bullet carries a bare marker ("azitromycin**") while the marker's legend
 # ("** Pouze pacientům, kteří nemohou užívat …") sits in a SEPARATE chunk (the table footnotes).
-# The concise answer-synthesis LLM otherwise flattens those reserve drugs into co-equal first-line
-# bullets. This folds the legend back onto each marker use by PURE INSERTION — it never alters
-# existing characters, so doses/loading-dose text are provably preserved. Abstain-safe: a marker
-# whose legend was not retrieved is left untouched (the source condition is never invented or
-# paraphrased). The ubiquitous single "*" (pediatric mg/kg dose) is excluded on purpose.
+# The answer-synthesis LLM otherwise flattens those reserve drugs into co-equal first-line bullets.
+# This REPLACES each marker use with a parenthetical of its verbatim legend
+# ("azitromycin**" -> "azitromycin (Pouze pacientům, kteří nemohou užívat …)"). Only the footnote
+# marker is removed; dose/loading-dose text (never inside the marker) is untouched. Plain grounded
+# prose — no "[]" sentinel, no surviving "**" — reads correctly in BOTH concise and verbose modes
+# whether the LLM rewords or copies it verbatim, so the LLM is never the last writer of the reserve
+# condition. Abstain-safe: a marker whose legend was not retrieved is left untouched (the source
+# condition is never invented or paraphrased). The ubiquitous single "*" (pediatric mg/kg dose) is
+# excluded on purpose.
 
 # Legend def: a "**"/"***" marker (asterisks may be backslash-escaped by MinerU) whose FIRST star is
 # not preceded by a word char / another star / a backslash (so it can't latch onto the tail of a
@@ -4926,8 +4930,8 @@ _RESERVE_USE_RE = re.compile(r"(?<=\w)(?:\\?\*){2,3}(?![\\*\w])")
 # use, so any line carrying an opener is skipped wholesale to avoid a false insertion. We guard on the
 # OPENER only (not the closer): a reserve marker use is itself "word**" at a boundary, so a closer
 # guard would skip the very lines we must transform. A stray cross-line bold-close is not observed in
-# the SVL ATB table/footnote chunks; worst case it appends an additive "[podmínka: …]" note (never a dose
-# edit), so the residual is low-harm.
+# the SVL ATB table/footnote chunks; worst case it swaps the marker for a "(…)" condition note (never a
+# dose edit), so the residual is low-harm.
 _OPENING_BOLD_RE = re.compile(r"(?:(?<=\s)|^)(?:\\?\*){2,}(?=\w)")
 
 
@@ -4948,7 +4952,8 @@ def _collect_reserve_legends(texts: list[str]) -> dict[int, str]:
 
 
 def _apply_reserve_legends(text: str, legends: dict[int, str]) -> str:
-    """Insert each marker's legend inline after its use (pure insertion; no existing char changes)."""
+    """Replace each marker use with a parenthetical of its verbatim legend (only the footnote marker
+    is removed; dose text is untouched)."""
     if not legends or "*" not in text:
         return text
 
@@ -4957,11 +4962,13 @@ def _apply_reserve_legends(text: str, legends: dict[int, str]) -> str:
         cond = legends.get(len(stars))
         if not cond:
             return m.group(0)
-        # Neutral prose label (NOT the raw "[**: …]" marker): the synthesis LLM echoed a raw-marker
-        # sentinel back as a bare "[]**" typographic token and dropped the condition prose. A word
-        # label is rendered as prose. Length-agnostic on purpose — the "**" (reserve) vs "***"
-        # (allergy/indication) distinction is carried by `cond`, not the label.
-        return f"{m.group(0)} [podmínka: {cond}]"
+        # Replace the marker with a parenthetical of the VERBATIM legend — do NOT keep the stars and
+        # do NOT wrap in "[]" brackets. Verbose synthesis echoes both a bare "**" (re-typeset as
+        # "[**]") and a "[…]" sentinel verbatim; grounded prose in plain parens is correct even when
+        # copied verbatim, so the LLM is not the last writer of the reserve condition. Consuming the
+        # stars removes the source of the "[**]" leak. Length-agnostic: the "**" (reserve) vs "***"
+        # (allergy/indication) meaning is carried by `cond`, so no label is needed.
+        return f" ({cond})"
 
     # Per line: skip any line that uses markdown bold (a bold-close mimics a marker use).
     return "\n".join(
