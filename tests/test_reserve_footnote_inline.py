@@ -45,12 +45,24 @@ def test_collect_maps_marker_length_to_legend():
 def test_apply_inlines_reserve_legend_cross_chunk():
     legends = _collect_reserve_legends([CHUNK_TABLE, CHUNK_FOOTNOTES])
     out = _apply_reserve_legends(CHUNK_TABLE, legends)
-    # ** drugs get the reserve condition inline right after the marker.
-    assert f"azitromycin** [**: {RESERVE_COND}]" in out
-    assert f"klaritromycin** [**: {RESERVE_COND}]" in out
-    # *** drug gets its own (allergy) legend, not the ** one.
-    assert "doxycyklin*** [***: " in out
+    # ** drugs get the reserve condition inline right after the marker, under a neutral prose label.
+    assert f"azitromycin** [podmínka: {RESERVE_COND}]" in out
+    assert f"klaritromycin** [podmínka: {RESERVE_COND}]" in out
+    # *** drug gets its own (allergy) legend, not the ** one — same neutral label, distinct condition.
+    assert "doxycyklin*** [podmínka: " in out
     assert ALLERGY_COND_HEAD in out.split("doxycyklin***")[1]
+
+
+def test_note_label_is_neutral_prose_not_raw_marker():
+    # Regression guard for docs/briefs/2026-07-20-guidelines-em-verbose-loading-dose-and-marker-leak.md
+    # residual 2: the raw "[**: …]" sentinel was echoed by the synthesis LLM as a bare "[]**" token
+    # with the condition prose dropped ("hvězdičky tam jsou, ale vysvětlení jich ne"). The inserted
+    # note must never reuse the raw "**"/"***" as its label.
+    legends = _collect_reserve_legends([CHUNK_TABLE, CHUNK_FOOTNOTES])
+    out = _apply_reserve_legends(CHUNK_TABLE, legends)
+    assert "[**:" not in out
+    assert "[***:" not in out
+    assert "[podmínka:" in out
 
 
 def test_insertion_only_preserves_dose_text():
@@ -58,9 +70,9 @@ def test_insertion_only_preserves_dose_text():
 
     legends = _collect_reserve_legends([CHUNK_TABLE, CHUNK_FOOTNOTES])
     out = _apply_reserve_legends(CHUNK_TABLE, legends)
-    # Pure insertion: stripping the inserted "[**: …]" / "[***: …]" notes yields the original byte
-    # for byte — nothing was deleted or reworded (doses / loading dose provably intact).
-    assert re.sub(r" \[\*+: [^\]]*\]", "", out) == CHUNK_TABLE
+    # Pure insertion: stripping the inserted "[podmínka: …]" notes yields the original byte for
+    # byte — nothing was deleted or reworded (doses / loading dose provably intact).
+    assert re.sub(r" \[podmínka: [^\]]*\]", "", out) == CHUNK_TABLE
     # The load-bearing dose tokens are still present as-is.
     assert "první den dvojnásobná dávka" in out
     assert "500 mg p. o." in out
