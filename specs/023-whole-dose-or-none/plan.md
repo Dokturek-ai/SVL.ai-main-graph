@@ -45,3 +45,11 @@ prompt breaks.
   means ~10 clean generations lowers but does not eliminate residual risk. Acceptance is "no partial dose in
   ≈10 generations"; if one still slips, escalate to a deterministic post-synthesis dose-completeness guard
   (out of scope here — raise a child brief). The clause is the right first lever (cheap, no code path).
+- Retrieval-gap residual (caveman-review): the clause fires only when the modifier "IS in the Context". If a
+  modifier lived in a DIFFERENT chunk that retrieval did not return, the rule would not fire and the model
+  could still state a bare base dose without violating it. Not fixed here, and **low applicability to this
+  hazard**: the azithromycin loading modifier `první den dvojnásobná dávka` sits on the SAME source table row
+  as the base dose (see `CHUNK_TABLE` in `tests/test_reserve_footnote_inline.py`), so if the base dose is in
+  Context the modifier is too. Broadening the clause to abstain on any base dose whose completeness is
+  unverifiable would over-fire (drop legit complete doses) — the true fix for a cross-chunk modifier is
+  retrieval-side, out of scope. Acknowledged residual, not a blocker.
