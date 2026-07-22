@@ -3,9 +3,9 @@
 Guards the query-side fix for docs/briefs/2026-07-20-guidelines-em-answer-dropped-dosing-qualifiers.md
 (Defect 2, reserve-only hierarchy). In the SVL ATB tables the reserve marker USE ("azitromycin**")
 and its LEGEND ("** Pouze pacientům, kteří nemohou užívat …") land in SEPARATE retrieved chunks
-(HTML table vs. table footnotes), so the transform is cross-chunk. It folds each marker's legend
-back onto every use by pure insertion — abstain-safe (no legend retrieved -> untouched) and never
-altering existing characters (doses / loading dose preserved verbatim).
+(HTML table vs. table footnotes), so the transform is cross-chunk. It REPLACES each marker use with a
+parenthetical of its verbatim legend (spec 022) — abstain-safe (no legend retrieved -> untouched),
+removing only the footnote marker and leaving dose / loading-dose text verbatim.
 
 Fragments below are verbatim from a staging /query/data probe (scratch/probe_em_raw_chunk.py):
 uses are UNescaped ("azitromycin**"), legends are backslash-ESCAPED ("\\*\\* Pouze …") as MinerU
@@ -45,35 +45,35 @@ def test_collect_maps_marker_length_to_legend():
 def test_apply_inlines_reserve_legend_cross_chunk():
     legends = _collect_reserve_legends([CHUNK_TABLE, CHUNK_FOOTNOTES])
     out = _apply_reserve_legends(CHUNK_TABLE, legends)
-    # ** drugs get the reserve condition inline right after the marker, under a neutral prose label.
-    assert f"azitromycin** [podmínka: {RESERVE_COND}]" in out
-    assert f"klaritromycin** [podmínka: {RESERVE_COND}]" in out
-    # *** drug gets its own (allergy) legend, not the ** one — same neutral label, distinct condition.
-    assert "doxycyklin*** [podmínka: " in out
-    assert ALLERGY_COND_HEAD in out.split("doxycyklin***")[1]
+    # ** drugs: the raw marker is REPLACED by a parenthetical of the verbatim reserve condition.
+    assert f"azitromycin ({RESERVE_COND})" in out
+    assert f"klaritromycin ({RESERVE_COND})" in out
+    # *** drug gets its own (allergy) legend, not the ** one — distinct condition, same prose form.
+    assert "doxycyklin (" in out
+    assert ALLERGY_COND_HEAD in out.split("doxycyklin (")[1]
 
 
-def test_note_label_is_neutral_prose_not_raw_marker():
+def test_no_bracket_or_bare_marker_survives():
     # Regression guard for docs/briefs/2026-07-20-guidelines-em-verbose-loading-dose-and-marker-leak.md
-    # residual 2: the raw "[**: …]" sentinel was echoed by the synthesis LLM as a bare "[]**" token
-    # with the condition prose dropped ("hvězdičky tam jsou, ale vysvětlení jich ne"). The inserted
-    # note must never reuse the raw "**"/"***" as its label.
+    # residual 2 + spec 022: the earlier "[podmínka: …]" sentinel and the raw "**" both leaked verbatim
+    # into VERBOSE synthesis ("azitromycin [podmínka: …]**" / "azitromycin [**]"). The transform must
+    # leave NO "[" bracket and NO bare reserve marker — only grounded parenthetical prose.
     legends = _collect_reserve_legends([CHUNK_TABLE, CHUNK_FOOTNOTES])
     out = _apply_reserve_legends(CHUNK_TABLE, legends)
-    assert "[**:" not in out
-    assert "[***:" not in out
-    assert "[podmínka:" in out
+    # Non-vacuous: reverting _repl to the old sentinel would leave "**" (and "[podmínka:") in out.
+    assert "**" not in out  # every "**"/"***" marker consumed (also kills the "[**]" echo source)
+    assert "[podmínka:" not in out  # the old bracketed sentinel is gone
+    assert RESERVE_COND in out
 
 
-def test_insertion_only_preserves_dose_text():
-    import re
-
+def test_marker_replacement_preserves_dose_text():
     legends = _collect_reserve_legends([CHUNK_TABLE, CHUNK_FOOTNOTES])
     out = _apply_reserve_legends(CHUNK_TABLE, legends)
-    # Pure insertion: stripping the inserted "[podmínka: …]" notes yields the original byte for
-    # byte — nothing was deleted or reworded (doses / loading dose provably intact).
-    assert re.sub(r" \[podmínka: [^\]]*\]", "", out) == CHUNK_TABLE
-    # The load-bearing dose tokens are still present as-is.
+    # Round-trip proof: swapping each inserted "(legend)" back to its "**"/"***" marker recovers the
+    # original byte-for-byte — so the transform changed ONLY the markers, nothing in the dose text.
+    restored = out.replace(f" ({legends[2]})", "**").replace(f" ({legends[3]})", "***")
+    assert restored == CHUNK_TABLE
+    # Spot-check the load-bearing dose tokens are still present verbatim.
     assert "první den dvojnásobná dávka" in out
     assert "500 mg p. o." in out
     assert "200–400 mg denně" in out
@@ -82,9 +82,10 @@ def test_insertion_only_preserves_dose_text():
 def test_pediatric_single_star_untouched():
     legends = _collect_reserve_legends([CHUNK_TABLE, CHUNK_FOOTNOTES])
     out = _apply_reserve_legends(CHUNK_TABLE, legends)
-    # "(10 mg/kg a den*)" is a single-* pediatric use -> no bracket inserted after it.
-    assert "a den*) [" not in out
-    assert "a den* [" not in out
+    # "(10 mg/kg a den*)" is a single-* pediatric use -> not a reserve marker, left verbatim (no
+    # condition parenthetical glued onto it).
+    assert "(10 mg/kg a den*)" in out
+    assert "(7,5 mg/kg a den*)" in out
 
 
 def test_abstain_when_legend_not_retrieved():
