@@ -4926,7 +4926,7 @@ _RESERVE_USE_RE = re.compile(r"(?<=\w)(?:\\?\*){2,3}(?![\\*\w])")
 # use, so any line carrying an opener is skipped wholesale to avoid a false insertion. We guard on the
 # OPENER only (not the closer): a reserve marker use is itself "word**" at a boundary, so a closer
 # guard would skip the very lines we must transform. A stray cross-line bold-close is not observed in
-# the SVL ATB table/footnote chunks; worst case it appends an additive "[**: …]" note (never a dose
+# the SVL ATB table/footnote chunks; worst case it appends an additive "[podmínka: …]" note (never a dose
 # edit), so the residual is low-harm.
 _OPENING_BOLD_RE = re.compile(r"(?:(?<=\s)|^)(?:\\?\*){2,}(?=\w)")
 
@@ -4957,7 +4957,11 @@ def _apply_reserve_legends(text: str, legends: dict[int, str]) -> str:
         cond = legends.get(len(stars))
         if not cond:
             return m.group(0)
-        return f"{m.group(0)} [{stars}: {cond}]"
+        # Neutral prose label (NOT the raw "[**: …]" marker): the synthesis LLM echoed a raw-marker
+        # sentinel back as a bare "[]**" typographic token and dropped the condition prose. A word
+        # label is rendered as prose. Length-agnostic on purpose — the "**" (reserve) vs "***"
+        # (allergy/indication) distinction is carried by `cond`, not the label.
+        return f"{m.group(0)} [podmínka: {cond}]"
 
     # Per line: skip any line that uses markdown bold (a bold-close mimics a marker use).
     return "\n".join(
